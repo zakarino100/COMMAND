@@ -1,0 +1,409 @@
+Build a complete internal social media scheduling and analytics dashboard 
+as a new React/Vite project. Private ops tool — no public auth, no 
+multi-tenant, no billing.
+
+---
+
+TECH STACK
+- Frontend: React + Vite
+- Backend: Node/Express
+- Database: Supabase (SUPABASE_URL + SUPABASE_SERVICE_KEY from env)
+- Scheduler: node-cron (every 5 minutes)
+- Image storage: Supabase Storage bucket "post-images"
+- Meta posting: Graph API v19.0
+- Notifications: Discord webhook (DISCORD_WEBHOOK_URL from env)
+- AI captions: OpenAI API (OPENAI_API_KEY from env)
+- No authentication needed — private Replit URL
+
+---
+
+DESIGN SYSTEM
+
+Dark mode only. Think Linear meets a high-end SaaS dashboard.
+
+Colors:
+- Background: #0A0A0A
+- Surface: #111111
+- Card: #1A1A1A
+- Border: #222222
+- Primary: #00C2FF (electric blue)
+- Success: #00E5A0 (mint green)
+- Warning: #FFB800 (amber)
+- Error: #FF4D4D (red)
+- Text primary: #FFFFFF
+- Text secondary: #888888
+- Text muted: #444444
+
+Typography: Inter (Google Fonts), JetBrains Mono for IDs/tokens
+Spacing: 8px base unit
+Animations: 200ms fade-in on load, 150ms hover transitions, 
+skeleton shimmer for loading states
+
+Cards: 1px borders, no heavy shadows, intentional and fast
+Buttons: pill-shaped for primary actions
+Active states: subtle blue glow border
+
+---
+
+LAYOUT
+
+Three-column on desktop, responsive stack on mobile.
+
+LEFT SIDEBAR (240px fixed):
+- App name: "COMMAND" small caps + electric blue dot
+- Brand switcher:
+  - Wolf Pack Wash 🐺
+  - Mop Mafia 🧹
+  - Blue Ocean 🌊
+  - Active brand: blue left border + subtle blue bg
+- Nav:
+  - Compose ✏️
+  - Queue 📅
+  - History 📋
+  - Performance 📊
+  - Library 🗂️
+  - Analytics (coming soon — grayed out)
+- Bottom: live date/time (America/New_York)
+
+MAIN AREA: content per nav selection
+RIGHT PANEL (320px fixed): contextual info per view
+
+---
+
+COMPOSE VIEW
+
+1. PLATFORM SELECTOR
+   Toggle buttons: Facebook | Instagram | Google Business Profile
+   Multiple selectable. Character count per platform updates live.
+   FB: /63,000 | IG: /2,200 | GBP: /1,500
+   Count turns amber at 80%, red at 95%
+
+2. POST METADATA (required on every post)
+   - Content Type dropdown:
+     Before/After | Offer/Promo | Testimonial | Educational | 
+     Behind the Scenes | Seasonal | Other
+   - Headline Variant label (text input, short — e.g. "spring hook v1")
+     This is for A/B tracking. Make it feel lightweight, not technical.
+
+3. CAPTION EDITOR
+   Large textarea. Placeholder: "What's the story today?"
+   
+   "Generate Caption" button below — calls OpenAI with:
+   - Brand name + voice (loaded from brand_config)
+   - Content type selected above
+   - Brief prompt input that appears when button is clicked:
+     "What is this post about? (one line)"
+   Returns a suggested caption. User can edit before posting.
+   Use GPT-4o. System prompt:
+   "You write punchy, human, conversion-focused social media captions 
+   for home service businesses. No hashtag spam. No corporate tone. 
+   Short sentences. Strong hooks. Match the brand voice provided."
+
+4. MEDIA UPLOAD
+   Drag and drop zone — supports image and video
+   Tag each asset with: content type (auto-filled from above) + brand
+   Stores to Supabase Storage with full metadata
+   Shows preview thumbnail. Remove button.
+   Flag format: 'image' | 'video' | 'carousel' (carousel = multiple 
+   images, show multi-upload when selected)
+
+5. LINK FIELD (optional)
+   If a URL is entered, auto-append UTM params:
+   ?utm_source={platform}&utm_medium=social&utm_brand={brand}&utm_content={post-id}
+   Show the final tagged URL in small text below for confirmation
+
+6. SCHEDULE TOGGLE
+   "Post Now" | "Schedule"
+   If Schedule: date + time picker (America/New_York)
+   Show suggested best times below picker based on historical 
+   performance data (if <10 posts: show generic recommendations; 
+   if 10+: show actual top-performing times from Supabase)
+
+7. SUBMIT BUTTON
+   Full width, primary blue, pill
+   "Post Now to [platforms]" or "Schedule for [date]"
+   Loading state: "Posting..." with pulse
+
+RIGHT PANEL on Compose: live post preview per selected platform.
+Updates in real time as caption/image change.
+
+---
+
+QUEUE VIEW
+
+Scheduled posts sorted soonest first. Each card shows:
+- Brand pill + platform icons
+- Content type badge + headline variant label
+- Caption preview (2 lines)
+- Image thumbnail
+- Scheduled time (relative + absolute)
+- Status: SCHEDULED (amber)
+- Cancel button (trash, red on hover)
+
+---
+
+HISTORY VIEW
+
+Past posts, most recent first. Filter by brand + platform + content type.
+
+Each card:
+- Brand pill + platform icons
+- Content type badge + headline variant
+- Caption preview
+- Image thumbnail
+- Posted time
+- Status: POSTED (green) or FAILED (red)
+- If failed: error message in red
+- Quick stats inline: 👍 likes · 👁 reach · 💬 comments
+  (populated after metrics sync runs)
+- Expand for full caption
+
+---
+
+PERFORMANCE VIEW
+
+This is the intelligence layer. Shows what's actually working.
+
+TOP SECTION — Summary cards (this week):
+- Total posts
+- Avg engagement rate
+- Best performing platform
+- Best performing content type
+
+RANKINGS TABLE — All posts ranked by engagement rate:
+Columns: Brand | Platform | Content Type | Headline Variant | 
+Reach | Likes | Comments | Engagement Rate | Posted Date
+
+Filterable by: brand | platform | content type | date range
+Sortable by any column
+
+INSIGHTS PANEL below table:
+Auto-generated text insights based on data:
+- "Before/After posts get 3x more engagement than Offers on Instagram"
+- "Tuesday 7pm is your best performing time slot for Wolf Pack Wash"
+- "Wolf Pack Wash outperforms Mop Mafia on Facebook by 40% this month"
+Generate these by querying the posts table and doing simple aggregations.
+Show top 3 insights. Refresh daily.
+
+BEST TIME HEATMAP:
+7-day × 24-hour grid showing average engagement by time slot per brand.
+Color intensity = engagement level. 
+Only show after 10+ posts exist. Before that: show placeholder 
+"Keep posting — your best times will appear here after 10 posts."
+
+---
+
+LIBRARY VIEW
+
+All uploaded media assets in a grid.
+Each asset shows: thumbnail, brand pill, content type tag, 
+times used, performance score (avg engagement of posts using it)
+Click to reuse in a new post (pre-fills Compose with that asset)
+Filter by brand / content type / format (image/video)
+
+---
+
+SUPABASE SCHEMA
+
+Table: posts
+- id (uuid, primary key, default gen_random_uuid())
+- brand (text)
+- platforms (text[])
+- caption (text)
+- image_url (text, nullable)
+- video_url (text, nullable)
+- media_format (text) — 'image' | 'video' | 'carousel' | 'text'
+- link_url (text, nullable) — original URL
+- link_url_tagged (text, nullable) — UTM-tagged version
+- content_type (text) — 'before_after' | 'offer' | 'testimonial' | 
+  'educational' | 'behind_scenes' | 'seasonal' | 'other'
+- headline_variant (text, nullable) — A/B test label
+- scheduled_at (timestamptz)
+- status (text) — 'scheduled'|'posting'|'posted'|'failed'
+- posted_at (timestamptz, nullable)
+- error_message (text, nullable)
+- fb_post_id (text, nullable) — store returned post ID for metrics
+- ig_post_id (text, nullable)
+- gbp_post_id (text, nullable)
+- created_at (timestamptz, default now())
+
+Table: post_metrics
+- id (uuid, primary key)
+- post_id (uuid, references posts.id)
+- platform (text)
+- fetched_at (timestamptz)
+- likes (int, default 0)
+- comments (int, default 0)
+- shares (int, default 0)
+- reach (int, default 0)
+- impressions (int, default 0)
+- clicks (int, default 0)
+- engagement_rate (float) — calculated: (likes+comments+shares)/reach
+- created_at (timestamptz, default now())
+
+Table: assets
+- id (uuid, primary key)
+- brand (text)
+- url (text) — Supabase Storage public URL
+- format (text) — 'image' | 'video'
+- content_type (text)
+- times_used (int, default 0)
+- avg_engagement (float, nullable)
+- created_at (timestamptz, default now())
+
+Table: brand_config
+- id (uuid, primary key)
+- brand (text, unique)
+- display_name (text)
+- emoji (text)
+- fb_page_id (text)
+- ig_account_id (text)
+- gbp_location_id (text, nullable)
+- brand_voice (text) — short description for AI caption generation
+- created_at (timestamptz, default now())
+
+Seed brand_config:
+- wolfpackwash | Wolf Pack Wash | 🐺 | fb_page_id from env 
+  META_PAGE_ID_WOLFPACKWASH | brand_voice: "Bold, confident, 
+  blue-collar pride. We get dirty so you don't have to."
+- mopmafia | Mop Mafia | 🧹 | META_PAGE_ID_MOPMAFIA | brand_voice: 
+  "Family-owned, warm, trustworthy. We treat your home like our own."
+- blueocean | Blue Ocean | 🌊 | META_PAGE_ID_BLUEOCEAN | brand_voice: 
+  "Sharp, strategic, results-driven. We grow home service businesses."
+
+---
+
+SCHEDULER (node-cron)
+
+Job 1 — Post scheduler (every 5 minutes):
+Query posts where scheduled_at <= now() AND status = 'scheduled'
+For each: set status 'posting' → fire platforms in parallel →
+update status 'posted' or 'failed' → send Discord notification
+
+Job 2 — Metrics sync (every 6 hours):
+Query posts where status = 'posted' AND posted_at >= now() - 30 days
+For each post, for each platform:
+- Call Meta Graph API for likes, comments, shares, reach, impressions
+- Call GBP API for clicks/views
+- Upsert into post_metrics table
+- Recalculate engagement_rate
+- Update assets.avg_engagement for any asset used in that post
+
+---
+
+META POSTING
+
+Tokens from env:
+- META_TOKEN_WOLFPACKWASH
+- META_TOKEN_MOPMAFIA
+- META_TOKEN_BLUEOCEAN
+
+Facebook:
+- Text post: POST /{page-id}/feed {message}
+- Image post: POST /{page-id}/photos {url, caption}
+- Store returned post ID as fb_post_id
+
+Instagram (two-step container):
+- Step 1: POST /{ig-id}/media {image_url, caption}
+- Step 2: POST /{ig-id}/media_publish {creation_id}
+- Store returned ID as ig_post_id
+- Skip if no media (IG feed requires image/video)
+
+Metrics fetch (Graph API):
+- GET /{post-id}/insights?metric=impressions,reach,post_clicks
+- GET /{post-id}?fields=likes.summary(true),comments.summary(true),shares
+
+---
+
+GBP POSTING
+
+OAuth2: GBP_CLIENT_ID, GBP_CLIENT_SECRET, GBP_REFRESH_TOKEN
+Auto-refresh access token before each call.
+POST to /v4/accounts/{account-id}/locations/{location-id}/localPosts
+Type: STANDARD, topicType: STANDARD
+Store returned name as gbp_post_id
+
+---
+
+DISCORD NOTIFICATIONS
+
+Send to DISCORD_WEBHOOK_URL for these events:
+
+✅ Post succeeded:
+"✅ [Brand] posted to [platforms] — [content_type] · [headline_variant]
+Caption: [first 100 chars]..."
+
+❌ Post failed:
+"🚨 FAILED — [Brand] → [platform]
+Error: [error_message]
+Scheduled for: [scheduled_at]
+Fix it: [replit-url]/queue"
+
+📊 Weekly digest (Monday 8am ET):
+"📊 Weekly Wrap — [date range]
+Posts: X | Avg engagement: X% | Top platform: X
+Best post: [headline_variant] on [platform] — X% engagement
+[link to Performance view]"
+
+---
+
+AI CAPTION GENERATION
+
+Model: gpt-4o
+Endpoint: POST /api/generate-caption
+Body: { brand, content_type, brief }
+
+System prompt:
+"You write punchy, human, conversion-focused social media captions for 
+home service businesses. No hashtag spam. No corporate tone. Short 
+sentences. Strong hooks. Write for the brand voice provided. 
+Return only the caption text, nothing else."
+
+User prompt:
+"Brand: [display_name]. Voice: [brand_voice]. 
+Content type: [content_type]. Brief: [brief].
+Write a caption."
+
+Return generated caption to frontend. User edits before posting.
+
+---
+
+UTM AUTO-TAGGING
+
+On every post with a link:
+Append: ?utm_source={platform}&utm_medium=social
+        &utm_brand={brand}&utm_content={post-id}
+Store original in link_url, tagged version in link_url_tagged.
+Show tagged URL preview in Compose before submitting.
+
+---
+
+ENV VARIABLES
+- SUPABASE_URL
+- SUPABASE_SERVICE_KEY
+- META_APP_ID
+- META_APP_SECRET
+- META_TOKEN_WOLFPACKWASH
+- META_TOKEN_MOPMAFIA
+- META_TOKEN_BLUEOCEAN
+- META_PAGE_ID_WOLFPACKWASH
+- META_PAGE_ID_MOPMAFIA
+- META_PAGE_ID_BLUEOCEAN
+- GBP_CLIENT_ID
+- GBP_CLIENT_SECRET
+- GBP_REFRESH_TOKEN
+- DISCORD_WEBHOOK_URL
+- OPENAI_API_KEY
+
+---
+
+IMPORTANT RULES
+- Dark mode only
+- Mobile responsive — sidebar collapses to bottom nav on mobile
+- All times in America/New_York
+- Error on one platform never stops others
+- Optimistic UI updates where possible
+- Empty states on every view — clean, not sad
+- No placeholder/demo data
+- Console log every post attempt and metrics sync with timestamp
+- This is used daily — make it feel fast and reliable
