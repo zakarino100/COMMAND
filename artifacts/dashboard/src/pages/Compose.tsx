@@ -1,9 +1,9 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useCreatePost, useGenerateCaption, useGetBestTimes, useGetAssetUploadUrl } from '@workspace/api-client-react';
+import { useCreatePost, useGenerateCaption, useGetBestTimes } from '@workspace/api-client-react';
 import { useBrand } from '@/contexts/BrandContext';
 import { Button, Card, Input, Textarea, Badge } from '@/components/ui/shared';
-import { ImagePlus, Wand2, Sparkles, Send, Calendar, Clock, Facebook, Instagram, MapPin, Upload, X, Film, Image } from 'lucide-react';
+import { ImagePlus, Wand2, Sparkles, Send, Calendar, Clock, Facebook, Instagram, MapPin, Upload, X, Film, Image, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 
 const PLATFORMS = [
@@ -13,6 +13,12 @@ const PLATFORMS = [
 ];
 
 const CONTENT_TYPES = ['Before/After', 'Offer/Promo', 'Testimonial', 'Educational', 'Behind the Scenes', 'Seasonal', 'Other'];
+
+// MP4, MOV, M4V are natively compatible with Safari on iOS/macOS
+const SAFARI_COMPATIBLE_VIDEO_MIMES = new Set(['video/mp4', 'video/quicktime', 'video/x-m4v']);
+const SAFARI_COMPATIBLE_VIDEO_EXTS = '.mp4, .mov, .m4v';
+
+const API_BASE = import.meta.env.BASE_URL.replace(/\/$/, '');
 
 export default function Compose() {
   const { activeBrand } = useBrand();
@@ -24,7 +30,7 @@ export default function Compose() {
   const [isScheduled, setIsScheduled] = useState(false);
   const [scheduleDate, setScheduleDate] = useState('');
   const [scheduleTime, setScheduleTime] = useState('');
-  
+
   const [brief, setBrief] = useState('');
   const [showAi, setShowAi] = useState(false);
   const [mediaFile, setMediaFile] = useState<File | null>(null);
@@ -32,19 +38,32 @@ export default function Compose() {
   const [mediaFormat, setMediaFormat] = useState<'image' | 'video'>('image');
   const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: bestTimes } = useGetBestTimes({ brand: activeBrand });
   const createPost = useCreatePost();
   const generateAi = useGenerateCaption();
-  const getUploadUrl = useGetAssetUploadUrl();
 
   const handleFileSelect = useCallback(async (file: File) => {
     const isVideo = file.type.startsWith('video/');
     const isImage = file.type.startsWith('image/');
-    if (!isVideo && !isImage) return;
 
+    if (!isVideo && !isImage) {
+      setUploadError('Only image and video files are supported.');
+      return;
+    }
+
+    // Issue 3: Reject non-Safari-compatible video formats
+    if (isVideo && !SAFARI_COMPATIBLE_VIDEO_MIMES.has(file.type)) {
+      setUploadError(
+        `Unsupported video format "${file.type}". Please use ${SAFARI_COMPATIBLE_VIDEO_EXTS} for compatibility across all devices including mobile Safari.`
+      );
+      return;
+    }
+
+    setUploadError(null);
     setMediaFile(file);
     setMediaFormat(isVideo ? 'video' : 'image');
     setMediaPreview(URL.createObjectURL(file));
@@ -52,32 +71,33 @@ export default function Compose() {
     setIsUploading(true);
 
     try {
-      getUploadUrl.mutate({
-        data: {
-          filename: file.name,
-          contentType: file.type,
-          brand: activeBrand,
-          assetContentType: contentType,
-          format: isVideo ? 'video' : 'image',
-        }
-      }, {
-        onSuccess: async (res) => {
-          await fetch(res.uploadUrl, {
-            method: 'PUT',
-            body: file,
-            headers: { 'Content-Type': file.type },
-          });
-          setUploadedUrl(res.publicUrl);
-          setIsUploading(false);
-        },
-        onError: () => {
-          setIsUploading(false);
-        }
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('brand', activeBrand);
+      formData.append('assetContentType', contentType);
+      formData.append('format', isVideo ? 'video' : 'image');
+
+      const response = await fetch(`${API_BASE}/api/assets/upload`, {
+        method: 'POST',
+        body: formData,
       });
-    } catch {
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({ error: 'Upload failed' }));
+        throw new Error(body.error ?? 'Upload failed');
+      }
+
+      const { publicUrl } = await response.json();
+      setUploadedUrl(publicUrl);
+    } catch (err: any) {
+      setUploadError(err?.message ?? 'Upload failed. Please try again.');
+      setMediaFile(null);
+      setMediaPreview(null);
+      setUploadedUrl(null);
+    } finally {
       setIsUploading(false);
     }
-  }, [activeBrand, contentType, getUploadUrl]);
+  }, [activeBrand, contentType]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -95,29 +115,37 @@ export default function Compose() {
     setMediaFile(null);
     setMediaPreview(null);
     setUploadedUrl(null);
+    setUploadError(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handlePlatformToggle = (id: string) => {
-    setPlatforms(prev => 
+    setPlatforms(prev =>
       prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]
     );
   };
 
-  const currentMaxChars = platforms.length > 0 
+  const currentMaxChars = platforms.length > 0
     ? Math.min(...platforms.map(p => PLATFORMS.find(pl => pl.id === p)?.max || 63000))
     : 2200;
-  
+
   const charCount = caption.length;
   const charPercent = charCount / currentMaxChars;
   const isCharWarning = charPercent > 0.8 && charPercent <= 0.95;
   const isCharError = charPercent > 0.95;
 
+  // Issue 2: never submit while upload is in progress or has failed with media selected
+  const canSubmit =
+    platforms.length > 0 &&
+    !!caption &&
+    !createPost.isPending &&
+    !isUploading &&
+    !(mediaFile && !uploadedUrl); // media selected but upload not yet resolved
+
   const handleSubmit = () => {
-    if (!caption || platforms.length === 0) return;
-    
-    // Combine date/time in NYC timezone roughly
-    const dateStr = isScheduled && scheduleDate && scheduleTime 
+    if (!canSubmit) return;
+
+    const dateStr = isScheduled && scheduleDate && scheduleTime
       ? new Date(`${scheduleDate}T${scheduleTime}:00`).toISOString()
       : new Date().toISOString();
 
@@ -163,7 +191,7 @@ export default function Compose() {
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="h-full flex flex-col lg:flex-row gap-6">
-      
+
       {/* Editor Column */}
       <div className="flex-1 flex flex-col gap-6">
         <div>
@@ -194,7 +222,7 @@ export default function Compose() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <label className="text-xs font-mono text-muted uppercase">Content Type</label>
-              <select 
+              <select
                 value={contentType}
                 onChange={e => setContentType(e.target.value)}
                 className="w-full h-10 rounded-xl border border-border bg-surface px-3 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none"
@@ -204,8 +232,8 @@ export default function Compose() {
             </div>
             <div className="space-y-2">
               <label className="text-xs font-mono text-muted uppercase">Headline Variant (Optional)</label>
-              <Input 
-                placeholder="e.g. Test A - Scarcity" 
+              <Input
+                placeholder="e.g. Test A - Scarcity"
                 value={headline}
                 onChange={e => setHeadline(e.target.value)}
               />
@@ -214,7 +242,7 @@ export default function Compose() {
 
           {/* AI Generator Toggle */}
           <div className="bg-surface/50 border border-border/50 rounded-xl p-1 overflow-hidden">
-            <button 
+            <button
               onClick={() => setShowAi(!showAi)}
               className="w-full flex items-center justify-between px-3 py-2 text-sm text-primary hover:bg-primary/5 rounded-lg transition-colors"
             >
@@ -223,14 +251,14 @@ export default function Compose() {
             </button>
             <AnimatePresence>
               {showAi && (
-                <motion.div 
+                <motion.div
                   initial={{ height: 0, opacity: 0 }}
                   animate={{ height: 'auto', opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
                   className="px-3 pb-3 pt-1 flex gap-2"
                 >
-                  <Input 
-                    placeholder="Briefly describe what this post is about..." 
+                  <Input
+                    placeholder="Briefly describe what this post is about..."
                     value={brief}
                     onChange={e => setBrief(e.target.value)}
                     className="bg-background"
@@ -244,8 +272,8 @@ export default function Compose() {
           </div>
 
           <div className="space-y-2 relative">
-            <Textarea 
-              placeholder="What's the story today?" 
+            <Textarea
+              placeholder="What's the story today?"
               className="min-h-[160px] text-base leading-relaxed"
               value={caption}
               onChange={e => setCaption(e.target.value)}
@@ -255,14 +283,32 @@ export default function Compose() {
             </div>
           </div>
 
-          {/* Media Upload */}
+          {/* Media Upload — Issue 1: direct server upload, Issue 3: Safari-safe file types */}
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*,video/*"
+            accept="image/*,.mp4,.mov,.m4v"
             className="hidden"
             onChange={handleInputChange}
           />
+
+          {/* Upload error banner */}
+          <AnimatePresence>
+            {uploadError && (
+              <motion.div
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                className="flex items-start gap-2 bg-red-950/40 border border-red-700/50 rounded-xl p-3 text-sm text-red-300"
+              >
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-red-400" />
+                <span>{uploadError}</span>
+                <button onClick={() => setUploadError(null)} className="ml-auto shrink-0 text-red-400 hover:text-red-200">
+                  <X className="w-4 h-4" />
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {mediaPreview ? (
             <div className="relative rounded-xl overflow-hidden border border-border bg-surface/30">
@@ -270,6 +316,7 @@ export default function Compose() {
                 <video
                   src={mediaPreview}
                   controls
+                  playsInline
                   className="w-full max-h-64 object-contain bg-black"
                 />
               ) : (
@@ -290,7 +337,7 @@ export default function Compose() {
                   </span>
                 )}
                 {uploadedUrl && !isUploading && (
-                  <span className="bg-black/60 rounded-full px-2 py-1 text-xs text-success">
+                  <span className="bg-black/60 rounded-full px-2 py-1 text-xs text-green-400">
                     ✓ Uploaded
                   </span>
                 )}
@@ -306,6 +353,7 @@ export default function Compose() {
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   className="text-xs text-primary hover:underline"
+                  disabled={isUploading}
                 >
                   Change
                 </button>
@@ -322,7 +370,7 @@ export default function Compose() {
             >
               <ImagePlus className={`w-8 h-8 mb-2 transition-colors ${isDragging ? 'text-primary' : ''}`} />
               <span className="text-sm font-medium mb-1">Drag & drop here</span>
-              <span className="text-xs opacity-60 mb-4">Photos and videos supported</span>
+              <span className="text-xs opacity-60 mb-4">Images &amp; Safari-compatible video (MP4, MOV, M4V)</span>
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -336,8 +384,8 @@ export default function Compose() {
 
           <div className="space-y-2">
             <label className="text-xs font-mono text-muted uppercase">Link URL</label>
-            <Input 
-              placeholder="https://..." 
+            <Input
+              placeholder="https://..."
               value={link}
               onChange={e => setLink(e.target.value)}
             />
@@ -351,15 +399,15 @@ export default function Compose() {
           <h3 className="font-mono text-sm uppercase tracking-wider text-muted flex items-center gap-2">
             <Calendar className="w-4 h-4" /> Schedule
           </h3>
-          
+
           <div className="flex bg-surface p-1 rounded-full border border-border">
-            <button 
+            <button
               className={`flex-1 text-sm py-1.5 rounded-full font-medium transition-all ${!isScheduled ? 'bg-background shadow text-foreground' : 'text-muted'}`}
               onClick={() => setIsScheduled(false)}
             >
               Post Now
             </button>
-            <button 
+            <button
               className={`flex-1 text-sm py-1.5 rounded-full font-medium transition-all ${isScheduled ? 'bg-background shadow text-foreground' : 'text-muted'}`}
               onClick={() => setIsScheduled(true)}
             >
@@ -374,7 +422,7 @@ export default function Compose() {
                   <Input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} className="text-xs" />
                   <Input type="time" value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} className="text-xs" />
                 </div>
-                
+
                 {bestTimes && bestTimes.hasEnoughData && (
                   <div className="bg-primary/5 border border-primary/20 rounded-lg p-3">
                     <p className="text-[10px] uppercase font-mono text-primary mb-2 flex items-center gap-1"><Clock className="w-3 h-3"/> Suggested Times</p>
@@ -391,15 +439,29 @@ export default function Compose() {
             )}
           </AnimatePresence>
 
-          <Button 
-            className="w-full mt-2" 
-            size="lg" 
-            disabled={platforms.length === 0 || !caption || createPost.isPending}
+          {/* Issue 2: disabled while uploading or media selected but not yet uploaded */}
+          <Button
+            className="w-full mt-2"
+            size="lg"
+            disabled={!canSubmit}
             onClick={handleSubmit}
           >
-            {createPost.isPending ? 'Processing...' : isScheduled ? 'Schedule Post' : 'Post Now'}
+            {isUploading
+              ? 'Uploading media…'
+              : createPost.isPending
+              ? 'Processing...'
+              : isScheduled
+              ? 'Schedule Post'
+              : 'Post Now'}
             <Send className="w-4 h-4 ml-2" />
           </Button>
+
+          {/* Hint when blocked by in-progress upload */}
+          {isUploading && (
+            <p className="text-xs text-muted text-center -mt-3">
+              Waiting for upload to finish…
+            </p>
+          )}
         </Card>
 
         {/* Live Preview */}

@@ -1,6 +1,7 @@
 import app from "./app.js";
 import { logger } from "./lib/logger.js";
 import { startScheduler } from "./lib/scheduler.js";
+import { initStorage } from "./routes/assets.js";
 
 const rawPort = process.env["PORT"];
 
@@ -24,4 +25,5 @@ app.listen(port, (err) => {
 
   logger.info({ port }, "Server listening");
   startScheduler();
+  initStorage().catch((err) => logger.warn({ err }, "Storage init failed"));
 });
