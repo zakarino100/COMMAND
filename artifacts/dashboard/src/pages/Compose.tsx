@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useCreatePost, useGenerateCaption, useGetBestTimes } from '@workspace/api-client-react';
+import { useCreatePost, useGenerateCaption, useGetBestTimes, useGetAssetUploadUrl } from '@workspace/api-client-react';
 import { useBrand } from '@/contexts/BrandContext';
 import { Button, Card, Input, Textarea, Badge } from '@/components/ui/shared';
-import { ImagePlus, Wand2, Sparkles, Send, Calendar, Clock, Facebook, Instagram, MapPin } from 'lucide-react';
+import { ImagePlus, Wand2, Sparkles, Send, Calendar, Clock, Facebook, Instagram, MapPin, Upload, X, Film, Image } from 'lucide-react';
 import { format } from 'date-fns';
 
 const PLATFORMS = [
@@ -27,10 +27,76 @@ export default function Compose() {
   
   const [brief, setBrief] = useState('');
   const [showAi, setShowAi] = useState(false);
+  const [mediaFile, setMediaFile] = useState<File | null>(null);
+  const [mediaPreview, setMediaPreview] = useState<string | null>(null);
+  const [mediaFormat, setMediaFormat] = useState<'image' | 'video'>('image');
+  const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: bestTimes } = useGetBestTimes({ brand: activeBrand });
   const createPost = useCreatePost();
   const generateAi = useGenerateCaption();
+  const getUploadUrl = useGetAssetUploadUrl();
+
+  const handleFileSelect = useCallback(async (file: File) => {
+    const isVideo = file.type.startsWith('video/');
+    const isImage = file.type.startsWith('image/');
+    if (!isVideo && !isImage) return;
+
+    setMediaFile(file);
+    setMediaFormat(isVideo ? 'video' : 'image');
+    setMediaPreview(URL.createObjectURL(file));
+    setUploadedUrl(null);
+    setIsUploading(true);
+
+    try {
+      getUploadUrl.mutate({
+        data: {
+          filename: file.name,
+          contentType: file.type,
+          brand: activeBrand,
+          assetContentType: contentType,
+          format: isVideo ? 'video' : 'image',
+        }
+      }, {
+        onSuccess: async (res) => {
+          await fetch(res.uploadUrl, {
+            method: 'PUT',
+            body: file,
+            headers: { 'Content-Type': file.type },
+          });
+          setUploadedUrl(res.publicUrl);
+          setIsUploading(false);
+        },
+        onError: () => {
+          setIsUploading(false);
+        }
+      });
+    } catch {
+      setIsUploading(false);
+    }
+  }, [activeBrand, contentType, getUploadUrl]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFileSelect(file);
+  }, [handleFileSelect]);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleFileSelect(file);
+  };
+
+  const clearMedia = () => {
+    setMediaFile(null);
+    setMediaPreview(null);
+    setUploadedUrl(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   const handlePlatformToggle = (id: string) => {
     setPlatforms(prev => 
@@ -63,15 +129,18 @@ export default function Compose() {
         content_type: contentType,
         headline_variant: headline || undefined,
         link_url: link || undefined,
+        image_url: mediaFormat === 'image' ? (uploadedUrl ?? undefined) : undefined,
+        video_url: mediaFormat === 'video' ? (uploadedUrl ?? undefined) : undefined,
+        media_format: uploadedUrl ? mediaFormat : 'text',
         scheduled_at: dateStr,
         post_now: !isScheduled,
-        media_format: 'text', // MVP simplified
       }
     }, {
       onSuccess: () => {
         setCaption('');
         setHeadline('');
         setLink('');
+        clearMedia();
         alert('Post successfully added to queue!');
       },
       onError: (err) => {
@@ -186,12 +255,84 @@ export default function Compose() {
             </div>
           </div>
 
-          {/* Media Stub */}
-          <div className="border-2 border-dashed border-border/50 rounded-xl p-8 flex flex-col items-center justify-center text-muted bg-surface/30 hover:bg-surface/60 transition-colors cursor-pointer group">
-            <ImagePlus className="w-8 h-8 mb-2 group-hover:text-primary transition-colors" />
-            <span className="text-sm font-medium">Drag & drop media here</span>
-            <span className="text-xs opacity-60 mt-1">Images or video up to 50MB</span>
-          </div>
+          {/* Media Upload */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,video/*"
+            className="hidden"
+            onChange={handleInputChange}
+          />
+
+          {mediaPreview ? (
+            <div className="relative rounded-xl overflow-hidden border border-border bg-surface/30">
+              {mediaFormat === 'video' ? (
+                <video
+                  src={mediaPreview}
+                  controls
+                  className="w-full max-h-64 object-contain bg-black"
+                />
+              ) : (
+                <img
+                  src={mediaPreview}
+                  alt="Media preview"
+                  className="w-full max-h-64 object-contain bg-surface/50"
+                />
+              )}
+              <div className="absolute top-2 left-2 flex items-center gap-1 bg-black/60 rounded-full px-2 py-1 text-xs text-white">
+                {mediaFormat === 'video' ? <Film className="w-3 h-3" /> : <Image className="w-3 h-3" />}
+                {mediaFormat}
+              </div>
+              <div className="absolute top-2 right-2 flex items-center gap-2">
+                {isUploading && (
+                  <span className="bg-black/60 rounded-full px-2 py-1 text-xs text-primary animate-pulse">
+                    Uploading…
+                  </span>
+                )}
+                {uploadedUrl && !isUploading && (
+                  <span className="bg-black/60 rounded-full px-2 py-1 text-xs text-success">
+                    ✓ Uploaded
+                  </span>
+                )}
+                <button
+                  onClick={clearMedia}
+                  className="bg-black/60 hover:bg-red-600/80 text-white rounded-full p-1 transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+              <div className="p-3 flex items-center justify-between">
+                <span className="text-xs text-muted truncate max-w-[60%]">{mediaFile?.name}</span>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-xs text-primary hover:underline"
+                >
+                  Change
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+              className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-muted transition-colors ${
+                isDragging ? 'border-primary bg-primary/5 text-primary' : 'border-border/50 bg-surface/30'
+              }`}
+            >
+              <ImagePlus className={`w-8 h-8 mb-2 transition-colors ${isDragging ? 'text-primary' : ''}`} />
+              <span className="text-sm font-medium mb-1">Drag & drop here</span>
+              <span className="text-xs opacity-60 mb-4">Photos and videos supported</span>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-2 px-4 py-2 rounded-full border border-primary text-primary text-sm font-medium hover:bg-primary/10 transition-colors active:scale-95"
+              >
+                <Upload className="w-4 h-4" />
+                Browse Files
+              </button>
+            </div>
+          )}
 
           <div className="space-y-2">
             <label className="text-xs font-mono text-muted uppercase">Link URL</label>
