@@ -1,22 +1,30 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: COMMAND Social Media Scheduling API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: posts
+    description: Post scheduling and management
+  - name: metrics
+    description: Post performance metrics
+  - name: assets
+    description: Media asset library
+  - name: brands
+    description: Brand configuration
+  - name: ai
+    description: AI caption generation
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +32,394 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /posts:
+    get:
+      operationId: listPosts
+      tags: [posts]
+      summary: List posts
+      parameters:
+        - name: brand
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: platform
+          in: query
+          schema:
+            type: string
+        - name: content_type
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of posts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  posts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Post"
+                  total:
+                    type: integer
+                required: [posts, total]
+    post:
+      operationId: createPost
+      tags: [posts]
+      summary: Create and schedule a post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePostRequest"
+      responses:
+        "201":
+          description: Post created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Post"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /posts/{id}:
+    get:
+      operationId: getPost
+      tags: [posts]
+      summary: Get a post by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Post
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Post"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deletePost
+      tags: [posts]
+      summary: Cancel/delete a scheduled post
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /posts/{id}/metrics:
+    get:
+      operationId: getPostMetrics
+      tags: [metrics]
+      summary: Get metrics for a post
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Post metrics
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PostMetric"
+
+  /metrics/summary:
+    get:
+      operationId: getMetricsSummary
+      tags: [metrics]
+      summary: Get aggregated metrics summary
+      parameters:
+        - name: brand
+          in: query
+          schema:
+            type: string
+        - name: platform
+          in: query
+          schema:
+            type: string
+        - name: content_type
+          in: query
+          schema:
+            type: string
+        - name: date_from
+          in: query
+          schema:
+            type: string
+        - name: date_to
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Metrics summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsSummary"
+
+  /metrics/insights:
+    get:
+      operationId: getInsights
+      tags: [metrics]
+      summary: Get auto-generated performance insights
+      parameters:
+        - name: brand
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Insights
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  insights:
+                    type: array
+                    items:
+                      type: string
+                required: [insights]
+
+  /metrics/heatmap:
+    get:
+      operationId: getHeatmap
+      tags: [metrics]
+      summary: Get engagement heatmap by day/hour
+      parameters:
+        - name: brand
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Heatmap data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/HeatmapCell"
+                  hasEnoughData:
+                    type: boolean
+                required: [data, hasEnoughData]
+
+  /assets:
+    get:
+      operationId: listAssets
+      tags: [assets]
+      summary: List media assets
+      parameters:
+        - name: brand
+          in: query
+          schema:
+            type: string
+        - name: content_type
+          in: query
+          schema:
+            type: string
+        - name: format
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of assets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  assets:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Asset"
+                required: [assets]
+
+  /assets/upload-url:
+    post:
+      operationId: getAssetUploadUrl
+      tags: [assets]
+      summary: Get a signed upload URL for Supabase Storage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filename:
+                  type: string
+                contentType:
+                  type: string
+                brand:
+                  type: string
+                assetContentType:
+                  type: string
+                format:
+                  type: string
+              required: [filename, contentType, brand, assetContentType, format]
+      responses:
+        "200":
+          description: Upload URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploadUrl:
+                    type: string
+                  publicUrl:
+                    type: string
+                  assetId:
+                    type: string
+                required: [uploadUrl, publicUrl, assetId]
+
+  /brands:
+    get:
+      operationId: listBrands
+      tags: [brands]
+      summary: List brand configurations
+      responses:
+        "200":
+          description: List of brands
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  brands:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Brand"
+                required: [brands]
+
+  /ai/generate-caption:
+    post:
+      operationId: generateCaption
+      tags: [ai]
+      summary: Generate an AI caption
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                brand:
+                  type: string
+                content_type:
+                  type: string
+                brief:
+                  type: string
+              required: [brand, content_type, brief]
+      responses:
+        "200":
+          description: Generated caption
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  caption:
+                    type: string
+                required: [caption]
+        "500":
+          description: AI error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /metrics/best-times:
+    get:
+      operationId: getBestTimes
+      tags: [metrics]
+      summary: Get suggested best posting times
+      parameters:
+        - name: brand
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Best posting times
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  times:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        day:
+                          type: string
+                        hour:
+                          type: integer
+                        label:
+                          type: string
+                        isGeneric:
+                          type: boolean
+                      required: [day, hour, label, isGeneric]
+                  hasEnoughData:
+                    type: boolean
+                required: [times, hasEnoughData]
+
 components:
   schemas:
     HealthStatus:
@@ -31,6 +427,246 @@ components:
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required: [success]
+
+    Post:
+      type: object
+      properties:
+        id:
+          type: string
+        brand:
+          type: string
+        platforms:
+          type: array
+          items:
+            type: string
+        caption:
+          type: string
+        image_url:
+          type: string
+          nullable: true
+        video_url:
+          type: string
+          nullable: true
+        media_format:
+          type: string
+        link_url:
+          type: string
+          nullable: true
+        link_url_tagged:
+          type: string
+          nullable: true
+        content_type:
+          type: string
+        headline_variant:
+          type: string
+          nullable: true
+        scheduled_at:
+          type: string
+        status:
+          type: string
+        posted_at:
+          type: string
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        fb_post_id:
+          type: string
+          nullable: true
+        ig_post_id:
+          type: string
+          nullable: true
+        gbp_post_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+      required: [id, brand, platforms, caption, media_format, content_type, scheduled_at, status, created_at]
+
+    CreatePostRequest:
+      type: object
+      properties:
+        brand:
+          type: string
+        platforms:
+          type: array
+          items:
+            type: string
+        caption:
+          type: string
+        image_url:
+          type: string
+          nullable: true
+        video_url:
+          type: string
+          nullable: true
+        media_format:
+          type: string
+          default: text
+        link_url:
+          type: string
+          nullable: true
+        content_type:
+          type: string
+        headline_variant:
+          type: string
+          nullable: true
+        scheduled_at:
+          type: string
+        post_now:
+          type: boolean
+          default: false
+      required: [brand, platforms, caption, content_type, scheduled_at]
+
+    PostMetric:
+      type: object
+      properties:
+        id:
+          type: string
+        post_id:
+          type: string
+        platform:
+          type: string
+        fetched_at:
+          type: string
+        likes:
+          type: integer
+        comments:
+          type: integer
+        shares:
+          type: integer
+        reach:
+          type: integer
+        impressions:
+          type: integer
+        clicks:
+          type: integer
+        engagement_rate:
+          type: number
+        created_at:
+          type: string
+      required: [id, post_id, platform, fetched_at, likes, comments, shares, reach, impressions, clicks, engagement_rate, created_at]
+
+    MetricsSummary:
+      type: object
+      properties:
+        totalPosts:
+          type: integer
+        avgEngagementRate:
+          type: number
+        bestPlatform:
+          type: string
+          nullable: true
+        bestContentType:
+          type: string
+          nullable: true
+        rankedPosts:
+          type: array
+          items:
+            $ref: "#/components/schemas/RankedPost"
+      required: [totalPosts, avgEngagementRate, rankedPosts]
+
+    RankedPost:
+      type: object
+      properties:
+        id:
+          type: string
+        brand:
+          type: string
+        platform:
+          type: string
+        content_type:
+          type: string
+        headline_variant:
+          type: string
+          nullable: true
+        reach:
+          type: integer
+        likes:
+          type: integer
+        comments:
+          type: integer
+        engagement_rate:
+          type: number
+        posted_at:
+          type: string
+          nullable: true
+      required: [id, brand, platform, content_type, reach, likes, comments, engagement_rate]
+
+    HeatmapCell:
+      type: object
+      properties:
+        day:
+          type: integer
+        hour:
+          type: integer
+        avgEngagement:
+          type: number
+        postCount:
+          type: integer
+      required: [day, hour, avgEngagement, postCount]
+
+    Asset:
+      type: object
+      properties:
+        id:
+          type: string
+        brand:
+          type: string
+        url:
+          type: string
+        format:
+          type: string
+        content_type:
+          type: string
+        times_used:
+          type: integer
+        avg_engagement:
+          type: number
+          nullable: true
+        created_at:
+          type: string
+      required: [id, brand, url, format, content_type, times_used, created_at]
+
+    Brand:
+      type: object
+      properties:
+        id:
+          type: string
+        brand:
+          type: string
+        display_name:
+          type: string
+        emoji:
+          type: string
+        fb_page_id:
+          type: string
+          nullable: true
+        ig_account_id:
+          type: string
+          nullable: true
+        gbp_location_id:
+          type: string
+          nullable: true
+        brand_voice:
+          type: string
+        created_at:
+          type: string
+      required: [id, brand, display_name, emoji, brand_voice, created_at]

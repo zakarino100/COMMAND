@@ -1,0 +1,13 @@
+packages:
+  "date-fns": "Human-readable date formatting and manipulation"
+  "lucide-react": "Clean, consistent iconography"
+  "recharts": "Data visualization for performance metrics"
+  "react-dropzone": "Drag and drop media uploads"
+  "framer-motion": "Smooth layout transitions and micro-interactions"
+  "clsx": "Utility for constructing className strings conditionally"
+  "tailwind-merge": "Utility to merge tailwind classes safely"
+
+notes:
+  - Application strictly uses dark mode aesthetics as requested.
+  - Orval generated hooks from @workspace/api-client-react are used for all data fetching.
+  - Using Intl.DateTimeFormat for America/New_York timezone specific rendering without needing date-fns-tz.
