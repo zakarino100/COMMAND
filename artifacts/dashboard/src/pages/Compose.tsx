@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useCreatePost, useGenerateCaption, useGetBestTimes } from '@workspace/api-client-react';
 import { useBrand } from '@/contexts/BrandContext';
 import { Button, Card, Input, Textarea, Badge } from '@/components/ui/shared';
-import { ImagePlus, Wand2, Sparkles, Send, Calendar, Clock, Facebook, Instagram, MapPin, Upload, X, Film, Image, AlertCircle } from 'lucide-react';
+import { ImagePlus, Wand2, Sparkles, Send, Calendar, Clock, Facebook, Instagram, MapPin, Upload, X, Film, Image, AlertCircle, Clapperboard } from 'lucide-react';
 import { format } from 'date-fns';
 
 const PLATFORMS = [
@@ -40,6 +40,7 @@ export default function Compose() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [instagramFormat, setInstagramFormat] = useState<'feed' | 'reel'>('feed');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: bestTimes } = useGetBestTimes({ brand: activeBrand });
@@ -160,6 +161,7 @@ export default function Compose() {
         image_url: mediaFormat === 'image' ? (uploadedUrl ?? undefined) : undefined,
         video_url: mediaFormat === 'video' ? (uploadedUrl ?? undefined) : undefined,
         media_format: uploadedUrl ? mediaFormat : 'text',
+        instagram_format: mediaFormat === 'video' ? instagramFormat : 'feed',
         scheduled_at: dateStr,
         post_now: !isScheduled,
       }
@@ -381,6 +383,60 @@ export default function Compose() {
               </button>
             </div>
           )}
+
+          {/* Reel / Feed toggle — only when video + Instagram are both active */}
+          <AnimatePresence>
+            {mediaFormat === 'video' && platforms.includes('instagram') && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="flex items-center gap-3 p-3 rounded-xl bg-surface/50 border border-border/50">
+                  <Clapperboard className="w-4 h-4 text-primary shrink-0" />
+                  <span className="text-xs text-muted font-mono uppercase tracking-wide">Instagram Format</span>
+                  <div className="ml-auto flex bg-background border border-border rounded-full p-0.5 gap-0.5">
+                    <button
+                      onClick={() => setInstagramFormat('feed')}
+                      className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+                        instagramFormat === 'feed' ? 'bg-primary text-black' : 'text-muted hover:text-foreground'
+                      }`}
+                    >
+                      Feed
+                    </button>
+                    <button
+                      onClick={() => setInstagramFormat('reel')}
+                      className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+                        instagramFormat === 'reel' ? 'bg-primary text-black' : 'text-muted hover:text-foreground'
+                      }`}
+                    >
+                      Reel
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* GBP + video warning */}
+          <AnimatePresence>
+            {mediaFormat === 'video' && platforms.includes('google') && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="flex items-start gap-2 bg-yellow-950/30 border border-yellow-700/40 rounded-xl p-3 text-xs text-yellow-300">
+                  <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-yellow-400" />
+                  <span>
+                    <strong>Google Business Profile doesn't support video.</strong> Your video will post to Facebook and Instagram normally — the GBP post will include your text and image (if any) only.
+                  </span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <div className="space-y-2">
             <label className="text-xs font-mono text-muted uppercase">Link URL</label>

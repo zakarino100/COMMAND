@@ -16,66 +16,143 @@ function getMetaToken(brand: string): string | undefined {
   return map[brand];
 }
 
+// ─── Facebook ─────────────────────────────────────────────────────────────────
+
 async function postToFacebook(post: Post, pageId: string, token: string): Promise<string> {
   const caption = post.link_url_tagged
     ? `${post.caption}\n\n${post.link_url_tagged}`
     : post.caption;
 
-  let url: string;
-  let body: Record<string, string>;
-
-  if (post.image_url) {
-    url = `https://graph.facebook.com/${META_VERSION}/${pageId}/photos`;
-    body = { url: post.image_url, caption, access_token: token };
-  } else {
-    url = `https://graph.facebook.com/${META_VERSION}/${pageId}/feed`;
-    body = { message: caption, access_token: token };
-    if (post.link_url_tagged) body.link = post.link_url_tagged;
+  // Video post
+  if (post.video_url) {
+    const res = await fetch(`https://graph.facebook.com/${META_VERSION}/${pageId}/videos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        file_url: post.video_url,
+        description: caption,
+        published: true,
+        access_token: token,
+      }),
+    });
+    const data = await res.json() as any;
+    if (!res.ok || data.error) {
+      throw new Error(data.error?.message ?? `FB video error ${res.status}`);
+    }
+    return data.id ?? "";
   }
 
-  const res = await fetch(url, {
+  // Image post
+  if (post.image_url) {
+    const res = await fetch(`https://graph.facebook.com/${META_VERSION}/${pageId}/photos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: post.image_url, caption, access_token: token }),
+    });
+    const data = await res.json() as any;
+    if (!res.ok || data.error) {
+      throw new Error(data.error?.message ?? `FB photo error ${res.status}`);
+    }
+    return data.id ?? data.post_id ?? "";
+  }
+
+  // Text-only post
+  const res = await fetch(`https://graph.facebook.com/${META_VERSION}/${pageId}/feed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      message: caption,
+      access_token: token,
+      ...(post.link_url_tagged ? { link: post.link_url_tagged } : {}),
+    }),
   });
-
   const data = await res.json() as any;
   if (!res.ok || data.error) {
-    throw new Error(data.error?.message ?? `FB API error ${res.status}`);
+    throw new Error(data.error?.message ?? `FB feed error ${res.status}`);
   }
-  return data.id ?? data.post_id ?? "";
+  return data.id ?? "";
+}
+
+// ─── Instagram ────────────────────────────────────────────────────────────────
+
+/** Poll IG container until it finishes processing (needed for video) */
+async function waitForIGContainer(containerId: string, token: string): Promise<void> {
+  const MAX_ATTEMPTS = 24; // up to ~2 minutes
+  const POLL_MS = 5000;
+
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    await new Promise((r) => setTimeout(r, POLL_MS));
+    const res = await fetch(
+      `https://graph.facebook.com/${META_VERSION}/${containerId}?fields=status_code&access_token=${token}`
+    );
+    const data = await res.json() as any;
+    if (data.status_code === "FINISHED") return;
+    if (data.status_code === "ERROR" || data.status_code === "EXPIRED") {
+      throw new Error(`Instagram container processing failed: ${data.status_code}`);
+    }
+  }
+  throw new Error("Instagram video processing timed out after 2 minutes");
 }
 
 async function postToInstagram(post: Post, igAccountId: string, token: string): Promise<string> {
-  if (!post.image_url) {
+  // Instagram requires media for all posts
+  if (!post.image_url && !post.video_url) {
     logger.warn({ postId: post.id }, "Instagram post skipped — no media");
     return "";
   }
 
-  const step1Res = await fetch(`https://graph.facebook.com/${META_VERSION}/${igAccountId}/media`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const isVideo = !!post.video_url;
+  const isReel = post.instagram_format === "reel";
+
+  let containerBody: Record<string, any>;
+
+  if (isVideo) {
+    containerBody = {
+      video_url: post.video_url,
+      caption: post.caption,
+      access_token: token,
+      ...(isReel
+        ? { media_type: "REELS", share_to_feed: true }
+        : { media_type: "VIDEO" }),
+    };
+  } else {
+    containerBody = {
       image_url: post.image_url,
       caption: post.caption,
       access_token: token,
-    }),
-  });
+    };
+  }
+
+  // Step 1: Create container
+  const step1Res = await fetch(
+    `https://graph.facebook.com/${META_VERSION}/${igAccountId}/media`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(containerBody),
+    }
+  );
   const step1Data = await step1Res.json() as any;
   if (!step1Res.ok || step1Data.error) {
-    throw new Error(step1Data.error?.message ?? `IG media container error ${step1Res.status}`);
+    throw new Error(step1Data.error?.message ?? `IG container error ${step1Res.status}`);
   }
 
   const containerId = step1Data.id;
 
-  const step2Res = await fetch(`https://graph.facebook.com/${META_VERSION}/${igAccountId}/media_publish`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      creation_id: containerId,
-      access_token: token,
-    }),
-  });
+  // Step 2: Poll until video is ready (skip for images)
+  if (isVideo) {
+    await waitForIGContainer(containerId, token);
+  }
+
+  // Step 3: Publish
+  const step2Res = await fetch(
+    `https://graph.facebook.com/${META_VERSION}/${igAccountId}/media_publish`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ creation_id: containerId, access_token: token }),
+    }
+  );
   const step2Data = await step2Res.json() as any;
   if (!step2Res.ok || step2Data.error) {
     throw new Error(step2Data.error?.message ?? `IG publish error ${step2Res.status}`);
@@ -83,6 +160,8 @@ async function postToInstagram(post: Post, igAccountId: string, token: string): 
 
   return step2Data.id ?? "";
 }
+
+// ─── Google Business Profile ──────────────────────────────────────────────────
 
 async function getGBPAccessToken(): Promise<string> {
   const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -118,6 +197,7 @@ async function postToGBP(post: Post, brandConfig: any, accessToken: string): Pro
       : undefined,
   };
 
+  // GBP only supports photos, not video
   if (post.image_url) {
     body.media = [{ mediaFormat: "PHOTO", sourceUrl: post.image_url }];
   }
@@ -140,77 +220,91 @@ async function postToGBP(post: Post, brandConfig: any, accessToken: string): Pro
   return data.name ?? "";
 }
 
+// ─── Execute ──────────────────────────────────────────────────────────────────
+
 export async function executePost(post: Post, log: any = logger): Promise<void> {
   const timestamp = new Date().toISOString();
-  log.info({ postId: post.id, brand: post.brand, platforms: post.platforms, timestamp }, "Executing post");
 
-  await db.update(postsTable).set({ status: "posting" }).where(eq(postsTable.id, post.id));
+  const [brandConfig] = await db
+    .select()
+    .from(brandConfigTable)
+    .where(eq(brandConfigTable.brand, post.brand));
 
-  const [brandConfig] = await db.select().from(brandConfigTable).where(eq(brandConfigTable.brand, post.brand));
-  const token = getMetaToken(post.brand);
-
-  const results: { platform: string; success: boolean; id?: string; error?: string }[] = [];
-
-  await Promise.all(
-    post.platforms.map(async (platform) => {
-      try {
-        let resultId = "";
-
-        if (platform === "facebook") {
-          if (!token) throw new Error("No META token for brand");
-          if (!brandConfig?.fb_page_id) throw new Error("No Facebook page ID configured");
-          resultId = await postToFacebook(post, brandConfig.fb_page_id, token);
-        } else if (platform === "instagram") {
-          if (!token) throw new Error("No META token for brand");
-          if (!brandConfig?.ig_account_id) throw new Error("No Instagram account ID configured");
-          resultId = await postToInstagram(post, brandConfig.ig_account_id, token);
-        } else if (platform === "gbp") {
-          const gbpToken = await getGBPAccessToken();
-          resultId = await postToGBP(post, brandConfig, gbpToken);
-        }
-
-        results.push({ platform, success: true, id: resultId });
-        log.info({ postId: post.id, platform, resultId, timestamp }, "Platform post succeeded");
-      } catch (err: any) {
-        results.push({ platform, success: false, error: err.message });
-        log.error({ err, postId: post.id, platform, timestamp }, "Platform post failed");
-      }
-    })
-  );
-
-  const allSucceeded = results.every(r => r.success);
-  const anySucceeded = results.some(r => r.success);
-  const fbResult = results.find(r => r.platform === "facebook");
-  const igResult = results.find(r => r.platform === "instagram");
-  const gbpResult = results.find(r => r.platform === "gbp");
-
-  const errors = results.filter(r => !r.success).map(r => `${r.platform}: ${r.error}`).join("; ");
-
-  await db.update(postsTable).set({
-    status: anySucceeded ? "posted" : "failed",
-    posted_at: anySucceeded ? new Date() : null,
-    error_message: errors || null,
-    fb_post_id: fbResult?.id ?? null,
-    ig_post_id: igResult?.id ?? null,
-    gbp_post_id: gbpResult?.id ?? null,
-  }).where(eq(postsTable.id, post.id));
-
-  const successPlatforms = results.filter(r => r.success).map(r => r.platform).join(", ");
-  const caption = post.caption.substring(0, 100);
-
-  if (anySucceeded) {
-    await sendDiscordNotification(
-      `✅ ${brandConfig?.display_name ?? post.brand} posted to ${successPlatforms} — ${post.content_type}${post.headline_variant ? ` · ${post.headline_variant}` : ""}\nCaption: ${caption}${post.caption.length > 100 ? "..." : ""}`
-    );
+  if (!brandConfig) {
+    throw new Error(`No brand config found for brand: ${post.brand}`);
   }
 
-  if (!allSucceeded) {
-    const failedPlatforms = results.filter(r => !r.success);
-    for (const f of failedPlatforms) {
-      const replitDomain = process.env.REPLIT_DOMAINS?.split(",")[0] ?? "";
-      await sendDiscordNotification(
-        `🚨 FAILED — ${brandConfig?.display_name ?? post.brand} → ${f.platform}\nError: ${f.error}\nScheduled for: ${post.scheduled_at.toISOString()}\nFix it: https://${replitDomain}/queue`
-      );
+  const metaToken = getMetaToken(post.brand);
+  const results: { platform: string; id: string }[] = [];
+  const errors: { platform: string; error: string }[] = [];
+
+  for (const platform of post.platforms) {
+    try {
+      let resultId = "";
+
+      if (platform === "facebook") {
+        if (!metaToken || !brandConfig.fb_page_id) {
+          throw new Error("Missing Meta token or Facebook Page ID");
+        }
+        resultId = await postToFacebook(post, brandConfig.fb_page_id, metaToken);
+
+      } else if (platform === "instagram") {
+        if (!metaToken || !brandConfig.ig_account_id) {
+          throw new Error("Missing Meta token or Instagram Account ID");
+        }
+        resultId = await postToInstagram(post, brandConfig.ig_account_id, metaToken);
+
+      } else if (platform === "google") {
+        const gbpToken = await getGBPAccessToken();
+        resultId = await postToGBP(post, brandConfig, gbpToken);
+      }
+
+      results.push({ platform, id: resultId });
+      log.info({ postId: post.id, platform, resultId }, `Posted to ${platform}`);
+    } catch (err: any) {
+      errors.push({ platform, error: err.message });
+      log.error({ err, postId: post.id, platform }, `Failed to post to ${platform}`);
     }
+  }
+
+  const fbResult = results.find((r) => r.platform === "facebook");
+  const igResult = results.find((r) => r.platform === "instagram");
+  const gbpResult = results.find((r) => r.platform === "google");
+
+  const allFailed = errors.length === post.platforms.length;
+  const someSucceeded = results.length > 0;
+
+  await db
+    .update(postsTable)
+    .set({
+      status: allFailed ? "failed" : "posted",
+      posted_at: new Date(),
+      fb_post_id: fbResult?.id ?? null,
+      ig_post_id: igResult?.id ?? null,
+      gbp_post_id: gbpResult?.id ?? null,
+      error_message: errors.length > 0
+        ? errors.map((e) => `${e.platform}: ${e.error}`).join("; ")
+        : null,
+    })
+    .where(eq(postsTable.id, post.id));
+
+  if (someSucceeded) {
+    await sendDiscordNotification({
+      type: "success",
+      brand: post.brand,
+      platforms: results.map((r) => r.platform),
+      caption: post.caption,
+      postId: post.id,
+      errors: errors.length > 0 ? errors : undefined,
+    });
+  } else {
+    await sendDiscordNotification({
+      type: "failure",
+      brand: post.brand,
+      platforms: post.platforms,
+      caption: post.caption,
+      postId: post.id,
+      errors,
+    });
   }
 }

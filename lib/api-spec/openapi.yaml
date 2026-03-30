@@ -477,6 +477,10 @@ components:
         headline_variant:
           type: string
           nullable: true
+        instagram_format:
+          type: string
+          nullable: true
+          description: "'feed' or 'reel' — only applies when posting video to Instagram"
         scheduled_at:
           type: string
         status:
@@ -528,6 +532,10 @@ components:
         headline_variant:
           type: string
           nullable: true
+        instagram_format:
+          type: string
+          nullable: true
+          description: "'feed' or 'reel' — only applies when posting video to Instagram"
         scheduled_at:
           type: string
         post_now:

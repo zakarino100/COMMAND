@@ -43,6 +43,12 @@ export const ListPostsResponse = zod.object({
       link_url_tagged: zod.string().nullish(),
       content_type: zod.string(),
       headline_variant: zod.string().nullish(),
+      instagram_format: zod
+        .string()
+        .nullish()
+        .describe(
+          "'feed' or 'reel' — only applies when posting video to Instagram",
+        ),
       scheduled_at: zod.string(),
       status: zod.string(),
       posted_at: zod.string().nullish(),
@@ -72,6 +78,12 @@ export const CreatePostBody = zod.object({
   link_url: zod.string().nullish(),
   content_type: zod.string(),
   headline_variant: zod.string().nullish(),
+  instagram_format: zod
+    .string()
+    .nullish()
+    .describe(
+      "'feed' or 'reel' — only applies when posting video to Instagram",
+    ),
   scheduled_at: zod.string(),
   post_now: zod.boolean().default(createPostBodyPostNowDefault),
 });
@@ -95,6 +107,12 @@ export const GetPostResponse = zod.object({
   link_url_tagged: zod.string().nullish(),
   content_type: zod.string(),
   headline_variant: zod.string().nullish(),
+  instagram_format: zod
+    .string()
+    .nullish()
+    .describe(
+      "'feed' or 'reel' — only applies when posting video to Instagram",
+    ),
   scheduled_at: zod.string(),
   status: zod.string(),
   posted_at: zod.string().nullish(),

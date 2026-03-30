@@ -45,7 +45,7 @@ router.get("/posts", async (req, res) => {
 router.post("/posts", async (req, res) => {
   try {
     const body = req.body;
-    const { brand, platforms, caption, image_url, video_url, media_format, link_url, content_type, headline_variant, scheduled_at, post_now } = body;
+    const { brand, platforms, caption, image_url, video_url, media_format, link_url, content_type, headline_variant, instagram_format, scheduled_at, post_now } = body;
 
     if (!brand || !platforms || !caption || !content_type || !scheduled_at) {
       return res.status(400).json({ error: "Missing required fields: brand, platforms, caption, content_type, scheduled_at" });
@@ -64,6 +64,7 @@ router.post("/posts", async (req, res) => {
       link_url_tagged: null,
       content_type,
       headline_variant: headline_variant || null,
+      instagram_format: instagram_format || "feed",
       scheduled_at: scheduledDate,
       status: "scheduled",
     }).returning();

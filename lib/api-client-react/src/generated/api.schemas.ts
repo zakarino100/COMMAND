@@ -30,6 +30,8 @@ export interface Post {
   link_url_tagged?: string | null;
   content_type: string;
   headline_variant?: string | null;
+  /** 'feed' or 'reel' — only applies when posting video to Instagram */
+  instagram_format?: string | null;
   scheduled_at: string;
   status: string;
   posted_at?: string | null;
@@ -50,6 +52,8 @@ export interface CreatePostRequest {
   link_url?: string | null;
   content_type: string;
   headline_variant?: string | null;
+  /** 'feed' or 'reel' — only applies when posting video to Instagram */
+  instagram_format?: string | null;
   scheduled_at: string;
   post_now?: boolean;
 }

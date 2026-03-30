@@ -14,6 +14,7 @@ export const postsTable = pgTable("posts", {
   link_url_tagged: text("link_url_tagged"),
   content_type: text("content_type").notNull(),
   headline_variant: text("headline_variant"),
+  instagram_format: text("instagram_format").default("feed"), // 'feed' | 'reel'
   scheduled_at: timestamp("scheduled_at", { withTimezone: true }).notNull(),
   status: text("status").notNull().default("scheduled"),
   posted_at: timestamp("posted_at", { withTimezone: true }),
