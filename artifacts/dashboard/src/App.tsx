@@ -11,6 +11,7 @@ import Queue from "@/pages/Queue";
 import History from "@/pages/History";
 import Performance from "@/pages/Performance";
 import Library from "@/pages/Library";
+import Ads from "@/pages/Ads";
 
 const queryClient = new QueryClient();
 
@@ -21,6 +22,7 @@ function Router() {
       <Route path="/queue" component={Queue} />
       <Route path="/history" component={History} />
       <Route path="/performance" component={Performance} />
+      <Route path="/ads" component={Ads} />
       <Route path="/library" component={Library} />
       <Route component={NotFound} />
     </Switch>

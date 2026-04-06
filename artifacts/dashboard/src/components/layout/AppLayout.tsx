@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
-import { PenSquare, CalendarDays, History, BarChart3, Image as ImageIcon, CheckCircle2 } from 'lucide-react';
+import { PenSquare, CalendarDays, History, BarChart3, Image as ImageIcon, Megaphone } from 'lucide-react';
 import { useBrand } from '@/contexts/BrandContext';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { name: 'Queue', path: '/queue', icon: CalendarDays },
   { name: 'History', path: '/history', icon: History },
   { name: 'Performance', path: '/performance', icon: BarChart3 },
+  { name: 'Ads', path: '/ads', icon: Megaphone },
   { name: 'Library', path: '/library', icon: ImageIcon },
 ];
 
@@ -90,7 +91,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             })}
             <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-muted/40 cursor-not-allowed">
               <BarChart3 className="w-4 h-4 opacity-40" />
-              Analytics <span className="text-[10px] ml-auto border border-border/50 px-1.5 rounded">Soon</span>
+              Advanced Analytics <span className="text-[10px] ml-auto border border-border/50 px-1.5 rounded">Soon</span>
             </div>
           </div>
         </div>
