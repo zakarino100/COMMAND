@@ -1,0 +1,154 @@
+import { db } from "@workspace/db";
+import { reviewsTable, brandConfigTable } from "@workspace/db/schema";
+import { eq, and, sql } from "drizzle-orm";
+import { logger } from "./logger.js";
+
+const OUTSCRAPER_API_URL = "https://api.outscraper.cloud/maps/reviews-v3";
+const FIVE_STAR_RATING = 5;
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface OutscraperReview {
+  review_id: string;
+  author_title: string;
+  author_image: string | null;
+  review_rating: number;
+  review_text: string | null;
+  review_datetime_utc: string | null;
+}
+
+interface OutscraperResponse {
+  status: string;
+  data: OutscraperReview[][];
+}
+
+// ─── Fetch from Outscraper ────────────────────────────────────────────────────
+
+async function fetchReviewsFromOutscraper(placeId: string): Promise<OutscraperReview[]> {
+  const apiKey = process.env.OUTSCRAPER_API_KEY;
+  if (!apiKey) {
+    throw new Error("OUTSCRAPER_API_KEY is not set");
+  }
+
+  const params = new URLSearchParams({
+    query: placeId,
+    reviewsLimit: "500",      // fetch up to 500 reviews per run (covers large backlogs)
+    language: "en",
+    sort: "newest",
+    cutoff: "5",              // only 5-star reviews
+  });
+
+  const res = await fetch(`${OUTSCRAPER_API_URL}?${params.toString()}`, {
+    headers: {
+      "X-API-KEY": apiKey,
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Outscraper API error ${res.status}: ${text}`);
+  }
+
+  const data = await res.json() as OutscraperResponse;
+
+  if (data.status !== "Success" || !data.data?.length) {
+    logger.warn({ placeId, status: data.status }, "Outscraper returned no data");
+    return [];
+  }
+
+  // data.data is an array of arrays (one per query)
+  return data.data[0] ?? [];
+}
+
+// ─── Sync Reviews for a Single Brand ─────────────────────────────────────────
+
+export async function syncReviewsForBrand(brand: string): Promise<{
+  brand: string;
+  fetched: number;
+  inserted: number;
+  skipped: number;
+}> {
+  const [brandConfig] = await db
+    .select()
+    .from(brandConfigTable)
+    .where(eq(brandConfigTable.brand, brand));
+
+  if (!brandConfig) {
+    throw new Error(`No brand config found for brand: ${brand}`);
+  }
+
+  if (!brandConfig.google_place_id) {
+    logger.warn({ brand }, "Skipping reviews sync — no google_place_id configured");
+    return { brand, fetched: 0, inserted: 0, skipped: 0 };
+  }
+
+  logger.info({ brand, placeId: brandConfig.google_place_id }, "Fetching reviews from Outscraper");
+
+  const rawReviews = await fetchReviewsFromOutscraper(brandConfig.google_place_id);
+
+  // Filter to 5-star only (Outscraper cutoff param should handle this, belt-and-suspenders)
+  const fiveStarReviews = rawReviews.filter((r) => r.review_rating === FIVE_STAR_RATING);
+
+  logger.info({ brand, fetched: rawReviews.length, fiveStar: fiveStarReviews.length }, "Reviews fetched");
+
+  let inserted = 0;
+  let skipped = 0;
+
+  for (const review of fiveStarReviews) {
+    try {
+      await db
+        .insert(reviewsTable)
+        .values({
+          brand,
+          google_review_id: review.review_id,
+          reviewer_name: review.author_title,
+          reviewer_photo_url: review.author_image ?? null,
+          rating: review.review_rating,
+          comment: review.review_text ?? null,
+          review_date: review.review_datetime_utc
+            ? new Date(review.review_datetime_utc)
+            : null,
+          source: "google",
+          is_published: true,
+        })
+        .onConflictDoNothing(); // skip if already stored (dedup by google_review_id)
+
+      inserted++;
+    } catch (err) {
+      logger.warn({ err, reviewId: review.review_id, brand }, "Failed to insert review");
+      skipped++;
+    }
+  }
+
+  logger.info({ brand, inserted, skipped }, "Reviews sync complete");
+  return { brand, fetched: fiveStarReviews.length, inserted, skipped };
+}
+
+// ─── Sync All Active Brands ───────────────────────────────────────────────────
+
+export async function syncAllBrandReviews(): Promise<void> {
+  logger.info("Reviews sync: starting for all brands with google_place_id");
+
+  const brands = await db
+    .select()
+    .from(brandConfigTable)
+    .where(sql`${brandConfigTable.google_place_id} IS NOT NULL`);
+
+  if (brands.length === 0) {
+    logger.info("Reviews sync: no brands with google_place_id configured, skipping");
+    return;
+  }
+
+  const results = [];
+  for (const brand of brands) {
+    try {
+      const result = await syncReviewsForBrand(brand.brand);
+      results.push(result);
+    } catch (err) {
+      logger.error({ err, brand: brand.brand }, "Reviews sync: failed for brand");
+    }
+  }
+
+  const total = results.reduce((sum, r) => sum + r.inserted, 0);
+  logger.info({ results, totalInserted: total }, "Reviews sync: all brands complete");
+}

@@ -5,3 +5,4 @@ export * from "./brand_config";
 export * from "./ad_accounts";
 export * from "./ad_campaigns";
 export * from "./ad_metrics_daily";
+export * from "./reviews";

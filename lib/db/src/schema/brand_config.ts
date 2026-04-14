@@ -10,6 +10,7 @@ export const brandConfigTable = pgTable("brand_config", {
   fb_page_id: text("fb_page_id"),
   ig_account_id: text("ig_account_id"),
   gbp_location_id: text("gbp_location_id"),
+  google_place_id: text("google_place_id"),
   brand_voice: text("brand_voice").notNull(),
   created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
