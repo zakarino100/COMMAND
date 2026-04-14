@@ -5,6 +5,7 @@ import { eq, and, lte, gte, sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { executePost } from "./posting.js";
 import { sendDiscordNotification } from "./discord.js";
+import { syncAllBrandReviews } from "./reviews.js";
 
 const META_VERSION = "v19.0";
 
@@ -170,6 +171,16 @@ export function startScheduler(): void {
       );
     } catch (err) {
       logger.error({ err }, "Weekly digest: failed");
+    }
+  });
+
+  // Job 4: Reviews sync — daily at 3am ET (8am UTC)
+  cron.schedule("0 8 * * *", async () => {
+    logger.info("Reviews sync: starting daily job");
+    try {
+      await syncAllBrandReviews();
+    } catch (err) {
+      logger.error({ err }, "Reviews sync: daily job failed");
     }
   });
 
