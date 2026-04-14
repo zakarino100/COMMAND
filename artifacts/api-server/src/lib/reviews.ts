@@ -22,7 +22,40 @@ interface OutscraperResponse {
   data: OutscraperReview[][];
 }
 
-// ─── Fetch from Outscraper ────────────────────────────────────────────────────
+// ─── Fetch from Outscraper (async job polling) ───────────────────────────────
+
+const POLL_INTERVAL_MS = 3000;  // poll every 3 seconds
+const POLL_MAX_ATTEMPTS = 40;   // max ~2 minutes
+
+async function pollForResults(resultsUrl: string, apiKey: string): Promise<OutscraperReview[]> {
+  for (let attempt = 0; attempt < POLL_MAX_ATTEMPTS; attempt++) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+
+    const res = await fetch(resultsUrl, {
+      headers: { "X-API-KEY": apiKey },
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Outscraper poll error ${res.status}: ${text}`);
+    }
+
+    const data = await res.json() as OutscraperResponse;
+    logger.info({ attempt, status: data.status }, "Outscraper poll");
+
+    if (data.status === "Success") {
+      return data.data?.[0] ?? [];
+    }
+
+    if (data.status === "Error" || data.status === "Failed") {
+      throw new Error(`Outscraper job failed with status: ${data.status}`);
+    }
+
+    // Still pending — keep polling
+  }
+
+  throw new Error("Outscraper job timed out after 2 minutes");
+}
 
 async function fetchReviewsFromOutscraper(placeId: string): Promise<OutscraperReview[]> {
   const apiKey = process.env.OUTSCRAPER_API_KEY;
@@ -32,15 +65,14 @@ async function fetchReviewsFromOutscraper(placeId: string): Promise<OutscraperRe
 
   const params = new URLSearchParams({
     query: placeId,
-    reviewsLimit: "500",      // fetch up to 500 reviews per run (covers large backlogs)
+    reviewsLimit: "500",
     language: "en",
     sort: "newest",
+    async: "true",  // explicitly request async mode
   });
 
   const res = await fetch(`${OUTSCRAPER_API_URL}?${params.toString()}`, {
-    headers: {
-      "X-API-KEY": apiKey,
-    },
+    headers: { "X-API-KEY": apiKey },
   });
 
   if (!res.ok) {
@@ -48,17 +80,20 @@ async function fetchReviewsFromOutscraper(placeId: string): Promise<OutscraperRe
     throw new Error(`Outscraper API error ${res.status}: ${text}`);
   }
 
-  const data = await res.json() as OutscraperResponse;
+  const initial = await res.json() as any;
+  logger.info({ placeId, status: initial.status, jobId: initial.id }, "Outscraper job submitted");
 
-  logger.info({ placeId, status: data.status, dataLength: data.data?.length, sample: data.data?.[0]?.[0] }, "Outscraper raw response");
-
-  if (data.status !== "Success" || !data.data?.length) {
-    logger.warn({ placeId, status: data.status, raw: JSON.stringify(data).slice(0, 500) }, "Outscraper returned no data");
-    return [];
+  // If already completed synchronously
+  if (initial.status === "Success") {
+    return initial.data?.[0] ?? [];
   }
 
-  // data.data is an array of arrays (one per query)
-  return data.data[0] ?? [];
+  // Async — poll for results
+  if (initial.results_location) {
+    return pollForResults(initial.results_location, apiKey);
+  }
+
+  throw new Error(`Unexpected Outscraper response: ${JSON.stringify(initial).slice(0, 300)}`);
 }
 
 // ─── Sync Reviews for a Single Brand ─────────────────────────────────────────
