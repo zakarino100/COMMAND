@@ -48,9 +48,9 @@ async function pollForResults(resultsUrl: string, apiKey: string): Promise<Outsc
       logger.info({ rawType: typeof raw, isArray: Array.isArray(raw), sample: JSON.stringify(raw)?.slice(0, 500) }, "Outscraper result structure");
       // data.data[0] may be an object with a reviews array, or an array of reviews directly
       if (Array.isArray(raw)) return raw;
+      if (raw && Array.isArray((raw as any).reviews_data)) return (raw as any).reviews_data;
       if (raw && Array.isArray((raw as any).reviews)) return (raw as any).reviews;
       if (raw && typeof raw === 'object') {
-        // Try to find any array property that looks like reviews
         const keys = Object.keys(raw as object);
         logger.info({ keys }, "Outscraper result keys");
         for (const key of keys) {
@@ -81,7 +81,7 @@ async function fetchReviewsFromOutscraper(placeId: string): Promise<OutscraperRe
     reviewsLimit: "500",
     language: "en",
     sort: "newest",
-    async: "true",  // explicitly request async mode
+    async: "false",  // use sync mode — Outscraper handles small jobs synchronously too
   });
 
   const res = await fetch(`${OUTSCRAPER_API_URL}?${params.toString()}`, {
