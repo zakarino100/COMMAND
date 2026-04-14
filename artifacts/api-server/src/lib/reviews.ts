@@ -15,11 +15,12 @@ interface OutscraperReview {
   review_rating: number;
   review_text: string | null;
   review_datetime_utc: string | null;
+  reviews_id: string; // alternate ID field
 }
 
 interface OutscraperResponse {
   status: string;
-  data: OutscraperReview[][];
+  data: any[]; // array of business objects, each containing reviews_data
 }
 
 // ─── Fetch from Outscraper (async job polling) ───────────────────────────────
@@ -44,20 +45,7 @@ async function pollForResults(resultsUrl: string, apiKey: string): Promise<Outsc
     logger.info({ attempt, status: data.status }, "Outscraper poll");
 
     if (data.status === "Success") {
-      const raw = data.data?.[0];
-      logger.info({ rawType: typeof raw, isArray: Array.isArray(raw), sample: JSON.stringify(raw)?.slice(0, 500) }, "Outscraper result structure");
-      // data.data[0] may be an object with a reviews array, or an array of reviews directly
-      if (Array.isArray(raw)) return raw;
-      if (raw && Array.isArray((raw as any).reviews_data)) return (raw as any).reviews_data;
-      if (raw && Array.isArray((raw as any).reviews)) return (raw as any).reviews;
-      if (raw && typeof raw === 'object') {
-        const keys = Object.keys(raw as object);
-        logger.info({ keys }, "Outscraper result keys");
-        for (const key of keys) {
-          if (Array.isArray((raw as any)[key])) return (raw as any)[key];
-        }
-      }
-      return [];
+      return extractReviews(data);
     }
 
     if (data.status === "Error" || data.status === "Failed") {
@@ -81,7 +69,6 @@ async function fetchReviewsFromOutscraper(placeId: string): Promise<OutscraperRe
     reviewsLimit: "500",
     language: "en",
     sort: "newest",
-    async: "false",  // use sync mode — Outscraper handles small jobs synchronously too
   });
 
   const res = await fetch(`${OUTSCRAPER_API_URL}?${params.toString()}`, {
@@ -98,10 +85,7 @@ async function fetchReviewsFromOutscraper(placeId: string): Promise<OutscraperRe
 
   // If already completed synchronously
   if (initial.status === "Success") {
-    const raw = initial.data?.[0];
-    if (Array.isArray(raw)) return raw;
-    if (raw && Array.isArray((raw as any).reviews)) return (raw as any).reviews;
-    return [];
+    return extractReviews(initial);
   }
 
   // Async — poll for results
@@ -110,6 +94,20 @@ async function fetchReviewsFromOutscraper(placeId: string): Promise<OutscraperRe
   }
 
   throw new Error(`Unexpected Outscraper response: ${JSON.stringify(initial).slice(0, 300)}`);
+}
+
+// Extract reviews_data from Outscraper response
+// data.data is an array of business objects, each with a reviews_data array
+function extractReviews(data: OutscraperResponse): OutscraperReview[] {
+  const businesses = data.data ?? [];
+  const allReviews: OutscraperReview[] = [];
+  for (const biz of businesses) {
+    const reviews = Array.isArray(biz)
+      ? biz  // already an array of reviews
+      : (biz as any).reviews_data ?? [];
+    allReviews.push(...reviews);
+  }
+  return allReviews;
 }
 
 // ─── Sync Reviews for a Single Brand ─────────────────────────────────────────
@@ -147,12 +145,15 @@ export async function syncReviewsForBrand(brand: string): Promise<{
   let skipped = 0;
 
   for (const review of fiveStarReviews) {
+    const reviewId = review.review_id || (review as any).reviews_id;
+    if (!reviewId) { skipped++; continue; }
+
     try {
       await db
         .insert(reviewsTable)
         .values({
           brand,
-          google_review_id: review.review_id,
+          google_review_id: reviewId,
           reviewer_name: review.author_title,
           reviewer_photo_url: review.author_image ?? null,
           rating: review.review_rating,
@@ -163,11 +164,11 @@ export async function syncReviewsForBrand(brand: string): Promise<{
           source: "google",
           is_published: true,
         })
-        .onConflictDoNothing(); // skip if already stored (dedup by google_review_id)
+        .onConflictDoNothing();
 
       inserted++;
     } catch (err) {
-      logger.warn({ err, reviewId: review.review_id, brand }, "Failed to insert review");
+      logger.warn({ err, reviewId, brand }, "Failed to insert review");
       skipped++;
     }
   }
