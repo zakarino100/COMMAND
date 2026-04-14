@@ -35,7 +35,6 @@ async function fetchReviewsFromOutscraper(placeId: string): Promise<OutscraperRe
     reviewsLimit: "500",      // fetch up to 500 reviews per run (covers large backlogs)
     language: "en",
     sort: "newest",
-    cutoff: "5",              // only 5-star reviews
   });
 
   const res = await fetch(`${OUTSCRAPER_API_URL}?${params.toString()}`, {
@@ -51,8 +50,10 @@ async function fetchReviewsFromOutscraper(placeId: string): Promise<OutscraperRe
 
   const data = await res.json() as OutscraperResponse;
 
+  logger.info({ placeId, status: data.status, dataLength: data.data?.length, sample: data.data?.[0]?.[0] }, "Outscraper raw response");
+
   if (data.status !== "Success" || !data.data?.length) {
-    logger.warn({ placeId, status: data.status }, "Outscraper returned no data");
+    logger.warn({ placeId, status: data.status, raw: JSON.stringify(data).slice(0, 500) }, "Outscraper returned no data");
     return [];
   }
 
