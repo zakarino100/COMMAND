@@ -171,7 +171,7 @@ export async function syncReviewsForBrand(brand: string): Promise<{
   }
 
   logger.info({ brand, inserted, skipped }, "Reviews sync complete");
-  return { brand, fetched: fiveStarReviews.length, inserted, skipped };
+  return { brand, fetched: rawReviews.length, inserted, skipped };
 }
 
 // ─── Sync All Active Brands ───────────────────────────────────────────────────
