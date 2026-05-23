@@ -1,10 +1,49 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { reviewsTable } from "@workspace/db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, gte } from "drizzle-orm";
 import { syncReviewsForBrand } from "../lib/reviews.js";
 
 const router = Router();
+
+// GET /reviews/:brand/all
+// Returns ALL reviews for a brand regardless of rating (used by CRM/internal)
+router.get("/reviews/:brand/all", async (req, res) => {
+  try {
+    const { brand } = req.params;
+    const minRating = req.query.minRating ? parseInt(req.query.minRating as string, 10) : 1;
+
+    const reviews = await db
+      .select({
+        id: reviewsTable.id,
+        reviewer_name: reviewsTable.reviewer_name,
+        reviewer_photo_url: reviewsTable.reviewer_photo_url,
+        rating: reviewsTable.rating,
+        comment: reviewsTable.comment,
+        review_date: reviewsTable.review_date,
+        is_published: reviewsTable.is_published,
+        source: reviewsTable.source,
+      })
+      .from(reviewsTable)
+      .where(
+        and(
+          eq(reviewsTable.brand, brand),
+          gte(reviewsTable.rating, minRating)
+        )
+      )
+      .orderBy(desc(reviewsTable.review_date));
+
+    res.json({
+      brand,
+      total: reviews.length,
+      fiveStar: reviews.filter(r => r.rating === 5).length,
+      reviews,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Failed to fetch all reviews");
+    res.status(500).json({ error: "Failed to fetch reviews" });
+  }
+});
 
 // GET /reviews/:brand
 // Returns all published 5-star reviews for a brand (used by website embeds)

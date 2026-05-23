@@ -4,7 +4,6 @@ import { eq, and, sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 
 const OUTSCRAPER_API_URL = "https://api.outscraper.cloud/maps/reviews-v3";
-const FIVE_STAR_RATING = 5;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -69,6 +68,7 @@ async function fetchReviewsFromOutscraper(placeId: string): Promise<OutscraperRe
     reviewsLimit: "500",
     language: "en",
     sort: "newest",
+    ignoreEmpty: "true",  // skip reviews with no text when possible
   });
 
   const res = await fetch(`${OUTSCRAPER_API_URL}?${params.toString()}`, {
@@ -136,15 +136,12 @@ export async function syncReviewsForBrand(brand: string): Promise<{
 
   const rawReviews = await fetchReviewsFromOutscraper(brandConfig.google_place_id);
 
-  // Filter to 5-star only (Outscraper cutoff param should handle this, belt-and-suspenders)
-  const fiveStarReviews = rawReviews.filter((r) => r.review_rating === FIVE_STAR_RATING);
-
-  logger.info({ brand, fetched: rawReviews.length, fiveStar: fiveStarReviews.length }, "Reviews fetched");
+  logger.info({ brand, fetched: rawReviews.length }, "Reviews fetched");
 
   let inserted = 0;
   let skipped = 0;
 
-  for (const review of fiveStarReviews) {
+  for (const review of rawReviews) {
     const reviewId = review.review_id || (review as any).reviews_id;
     if (!reviewId) { skipped++; continue; }
 
