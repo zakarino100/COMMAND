@@ -9,6 +9,7 @@ import authRouter from "./auth.js";
 import adsRouter from "./ads.js";
 import reviewsRouter from "./reviews.js";
 import embedRouter from "./embed.js";
+import agentsRouter from "./agents.js";
 
 const router: IRouter = Router();
 
@@ -22,5 +23,6 @@ router.use(authRouter);
 router.use(adsRouter);
 router.use(reviewsRouter);
 router.use(embedRouter);
+router.use(agentsRouter);
 
 export default router;

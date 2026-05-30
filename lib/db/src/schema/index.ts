@@ -6,3 +6,8 @@ export * from "./ad_accounts";
 export * from "./ad_campaigns";
 export * from "./ad_metrics_daily";
 export * from "./reviews";
+export * from "./agents";
+export * from "./agent_variants";
+export * from "./customers";
+export * from "./conversations";
+export * from "./ab_test_results";
