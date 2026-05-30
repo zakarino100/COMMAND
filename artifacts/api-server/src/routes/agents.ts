@@ -1,372 +1,310 @@
-import { Router, type IRouter, type Request, type Response } from "express";
-import { getDb } from "@workspace/db";
-import {
-  agentsTable,
-  agentVariantsTable,
-  conversationsTable,
-  customersTable,
-  abTestResultsTable,
-  type InsertAgent,
-  type InsertAgentVariant,
-  type InsertConversation,
-  type InsertCustomer,
-} from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import { db } from "@workspace/db";
+import { sql } from "drizzle-orm";
 
 const router: IRouter = Router();
-const db = getDb();
 
-// Middleware to check API key
-const authMiddleware = (req: Request, res: Response, next: Function) => {
-  const authHeader = req.headers.authorization;
+// ─── Auth middleware ──────────────────────────────────────────────────────────
+const requireApiKey = (req: Request, res: Response, next: NextFunction): void => {
   const apiKey = process.env.COMMAND_API_KEY;
-
-  if (!apiKey) {
-    console.warn("COMMAND_API_KEY not set in environment");
-    return next();
+  if (!apiKey) { next(); return; } // no key set → open (dev only)
+  const header = req.headers.authorization ?? "";
+  if (!header.startsWith("Bearer ") || header.slice(7) !== apiKey) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
   }
-
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  const token = authHeader.substring(7);
-  if (token !== apiKey) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-
   next();
 };
 
-router.use(authMiddleware);
+router.use("/agents", requireApiKey);
+router.use("/customers", requireApiKey);
+router.use("/variants", requireApiKey);
+router.use("/conversations", requireApiKey);
 
-// GET /api/agents/:agent_id
-router.get("/agents/:agent_id", async (req: Request, res: Response) => {
+// ─── Agents (backed by swell_ai_configs + swell_tenants) ─────────────────────
+
+// GET /api/agents — list all tenants + their AI config
+router.get("/agents", async (_req: Request, res: Response) => {
   try {
-    const { agent_id } = req.params;
-    const agent = await db.query.agentsTable.findFirst({
-      where: eq(agentsTable.id, agent_id),
-      with: {
-        variants: {
-          where: eq(agentVariantsTable.is_control, true),
-        },
-      },
-    });
-
-    if (!agent) {
-      return res.status(404).json({ error: "Agent not found" });
-    }
-
-    res.json(agent);
-  } catch (error) {
-    console.error("Error fetching agent:", error);
-    res.status(500).json({ error: "Internal server error" });
+    const result = await db.execute(sql`
+      SELECT ac.*, t.name AS tenant_name, t.slug, t.enabled,
+             t.owner_name, t.owner_phone, t.owner_discord_user_id
+      FROM swell_ai_configs ac
+      JOIN swell_tenants t ON t.id = ac.tenant_id
+      ORDER BY t.name
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET /agents error:", err);
+    res.status(500).json({ error: String(err) });
   }
 });
 
-// GET /api/agents
-router.get("/agents", async (req: Request, res: Response) => {
+// GET /api/agents/:tenant_id — single agent with active variant
+router.get("/agents/:tenant_id", async (req: Request, res: Response) => {
   try {
-    const agents = await db.query.agentsTable.findMany();
-    res.json(agents);
-  } catch (error) {
-    console.error("Error fetching agents:", error);
-    res.status(500).json({ error: "Internal server error" });
+    const { tenant_id } = req.params;
+    const result = await db.execute(sql`
+      SELECT ac.*, t.name AS tenant_name, t.slug, t.enabled,
+             t.owner_name, t.owner_phone, t.owner_discord_user_id,
+             t.owner_discord_channel_id, t.google_review_url
+      FROM swell_ai_configs ac
+      JOIN swell_tenants t ON t.id = ac.tenant_id
+      WHERE ac.tenant_id = ${tenant_id}
+      LIMIT 1
+    `);
+    if (!result.rows.length) { res.status(404).json({ error: "Agent not found" }); return; }
+
+    const variant = await db.execute(sql`
+      SELECT * FROM platform_variants
+      WHERE tenant_id = ${tenant_id} AND is_control = true
+      LIMIT 1
+    `);
+    res.json({ ...result.rows[0], active_variant: variant.rows[0] ?? null });
+  } catch (err) {
+    console.error("GET /agents/:id error:", err);
+    res.status(500).json({ error: String(err) });
   }
 });
 
-// POST /api/agents
-router.post("/agents", async (req: Request, res: Response) => {
+// PATCH /api/agents/:tenant_id — update agent config
+router.patch("/agents/:tenant_id", async (req: Request, res: Response) => {
   try {
-    const { name, brand_id, mode, avatar_url, channels } = req.body;
-
-    if (!name || !brand_id || !mode) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    const newAgent = await db
-      .insert(agentsTable)
-      .values({
-        name,
-        brand_id,
-        mode,
-        avatar_url,
-        channels: channels || {},
-      } as InsertAgent)
-      .returning();
-
-    res.status(201).json(newAgent[0]);
-  } catch (error) {
-    console.error("Error creating agent:", error);
-    res.status(500).json({ error: "Internal server error" });
+    const { tenant_id } = req.params;
+    const { avatar_url, channels, mode, persona_name, services_json, pricing_matrix, custom_brand_notes } = req.body;
+    await db.execute(sql`
+      UPDATE swell_ai_configs SET
+        avatar_url         = COALESCE(${avatar_url ?? null}, avatar_url),
+        channels           = COALESCE(${channels ? JSON.stringify(channels) : null}::jsonb, channels),
+        mode               = COALESCE(${mode ?? null}, mode),
+        persona_name       = COALESCE(${persona_name ?? null}, persona_name),
+        services_json      = COALESCE(${services_json ? JSON.stringify(services_json) : null}::jsonb, services_json),
+        pricing_matrix     = COALESCE(${pricing_matrix ? JSON.stringify(pricing_matrix) : null}::jsonb, pricing_matrix),
+        custom_brand_notes = COALESCE(${custom_brand_notes ?? null}, custom_brand_notes),
+        updated_at         = NOW()
+      WHERE tenant_id = ${tenant_id}
+    `);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("PATCH /agents/:id error:", err);
+    res.status(500).json({ error: String(err) });
   }
 });
 
-// GET /api/agents/:agent_id/variants
-router.get("/agents/:agent_id/variants", async (req: Request, res: Response) => {
-  try {
-    const { agent_id } = req.params;
-    const variants = await db.query.agentVariantsTable.findMany({
-      where: eq(agentVariantsTable.agent_id, agent_id),
-    });
+// ─── Variants (platform_variants — system-prompt A/B testing) ─────────────────
 
-    res.json(variants);
-  } catch (error) {
-    console.error("Error fetching variants:", error);
-    res.status(500).json({ error: "Internal server error" });
+// GET /api/agents/:tenant_id/variants
+router.get("/agents/:tenant_id/variants", async (req: Request, res: Response) => {
+  try {
+    const { tenant_id } = req.params;
+    const result = await db.execute(sql`
+      SELECT *,
+        CASE WHEN total_conversations > 0
+          THEN ROUND((successful_conversions::numeric / total_conversations) * 100, 2)
+          ELSE 0 END AS conversion_pct
+      FROM platform_variants
+      WHERE tenant_id = ${tenant_id}
+      ORDER BY is_control DESC, created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET variants error:", err);
+    res.status(500).json({ error: String(err) });
   }
 });
 
-// POST /api/agents/:agent_id/variants
-router.post("/agents/:agent_id/variants", async (req: Request, res: Response) => {
+// POST /api/agents/:tenant_id/variants
+router.post("/agents/:tenant_id/variants", async (req: Request, res: Response) => {
   try {
-    const { agent_id } = req.params;
-    const {
-      variant_name,
-      system_prompt,
-      greeting_message,
-      address_validation_instructions,
-      closing_instructions,
-      objection_handling,
-      is_control,
-    } = req.body;
-
+    const { tenant_id } = req.params;
+    const { variant_name, system_prompt, greeting_message, address_collection_method, closing_style, objection_handling, is_control } = req.body;
     if (!variant_name || !system_prompt || !greeting_message) {
-      return res.status(400).json({ error: "Missing required fields" });
+      res.status(400).json({ error: "variant_name, system_prompt, greeting_message required" });
+      return;
     }
-
-    const newVariant = await db
-      .insert(agentVariantsTable)
-      .values({
-        agent_id,
-        variant_name,
-        system_prompt,
-        greeting_message,
-        address_validation_instructions,
-        closing_instructions,
-        objection_handling,
-        is_control: is_control || false,
-      } as InsertAgentVariant)
-      .returning();
-
-    res.status(201).json(newVariant[0]);
-  } catch (error) {
-    console.error("Error creating variant:", error);
-    res.status(500).json({ error: "Internal server error" });
+    // Unset existing controls if this is the new control
+    if (is_control) {
+      await db.execute(sql`UPDATE platform_variants SET is_control = false WHERE tenant_id = ${tenant_id}`);
+    }
+    const result = await db.execute(sql`
+      INSERT INTO platform_variants
+        (tenant_id, variant_name, system_prompt, greeting_message,
+         address_collection_method, closing_style, objection_handling, is_control)
+      VALUES
+        (${tenant_id}, ${variant_name}, ${system_prompt}, ${greeting_message},
+         ${address_collection_method ?? "three_part"}, ${closing_style ?? null},
+         ${objection_handling ?? null}, ${is_control ?? false})
+      RETURNING *
+    `);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error("POST variants error:", err);
+    res.status(500).json({ error: String(err) });
   }
 });
 
-// POST /api/conversations
-router.post("/conversations", async (req: Request, res: Response) => {
+// PATCH /api/variants/:variant_id/stats — called after each conversation ends
+router.patch("/variants/:variant_id/stats", async (req: Request, res: Response) => {
   try {
-    const {
-      agent_id,
-      brand_id,
-      customer_id,
-      channel,
-      variant_id,
-      role,
-      content,
-      outcome,
-    } = req.body;
-
-    if (!agent_id || !brand_id || !channel) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    // Find or create conversation (get latest for this agent+customer+variant on this channel)
-    let conversation = await db.query.conversationsTable.findFirst({
-      where: and(
-        eq(conversationsTable.agent_id, agent_id),
-        eq(conversationsTable.customer_id, customer_id),
-        eq(conversationsTable.channel, channel),
-        eq(conversationsTable.variant_id, variant_id)
-      ),
-      orderBy: (conversations, { desc }) => [desc(conversations.created_at)],
-    });
-
-    const newMessage = { role, content, timestamp: new Date().toISOString() };
-
-    if (conversation) {
-      // Append to existing conversation
-      const updatedMessages = [...(conversation.messages as any[]), newMessage];
-      const [updated] = await db
-        .update(conversationsTable)
-        .set({
-          messages: updatedMessages,
-          outcome: outcome || conversation.outcome,
-          updated_at: new Date(),
-        })
-        .where(eq(conversationsTable.id, conversation.id))
-        .returning();
-
-      res.json(updated);
-    } else {
-      // Create new conversation
-      const [created] = await db
-        .insert(conversationsTable)
-        .values({
-          agent_id,
-          brand_id,
-          customer_id,
-          channel,
-          variant_id,
-          messages: [newMessage],
-          outcome,
-        } as InsertConversation)
-        .returning();
-
-      res.status(201).json(created);
-    }
-  } catch (error) {
-    console.error("Error logging conversation:", error);
-    res.status(500).json({ error: "Internal server error" });
+    const { variant_id } = req.params;
+    const { converted } = req.body;
+    await db.execute(sql`
+      UPDATE platform_variants SET
+        total_conversations    = total_conversations + 1,
+        successful_conversions = successful_conversions + ${converted ? 1 : 0},
+        conversion_rate        = (successful_conversions + ${converted ? 1 : 0})::float
+                                 / (total_conversations + 1),
+        updated_at             = NOW()
+      WHERE id = ${variant_id}::uuid
+    `);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("PATCH variant stats error:", err);
+    res.status(500).json({ error: String(err) });
   }
 });
 
-// GET /api/customers/search
+// ─── Conversations (backed by swell_conversations + swell_conversation_messages) ─
+
+// POST /api/conversations/message — log a single turn
+router.post("/conversations/message", async (req: Request, res: Response) => {
+  try {
+    const { conversation_id, tenant_id, role, body, model_used, tokens_in, tokens_out, platform_variant_id } = req.body;
+    if (!conversation_id || !tenant_id || !role || !body) {
+      res.status(400).json({ error: "conversation_id, tenant_id, role, body required" });
+      return;
+    }
+    const msg = await db.execute(sql`
+      INSERT INTO swell_conversation_messages (conversation_id, tenant_id, role, body, model_used, tokens_in, tokens_out)
+      VALUES (${conversation_id}, ${tenant_id}, ${role}, ${body},
+              ${model_used ?? null}, ${tokens_in ?? null}, ${tokens_out ?? null})
+      RETURNING *
+    `);
+    await db.execute(sql`
+      UPDATE swell_conversations SET
+        last_message_at     = NOW(),
+        last_role           = ${role},
+        total_messages      = total_messages + 1,
+        platform_variant_id = COALESCE(${platform_variant_id ?? null}::uuid, platform_variant_id),
+        updated_at          = NOW()
+      WHERE id = ${conversation_id}
+    `);
+    res.status(201).json(msg.rows[0]);
+  } catch (err) {
+    console.error("POST /conversations/message error:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// GET /api/conversations/:id/messages
+router.get("/conversations/:conversation_id/messages", async (req: Request, res: Response) => {
+  try {
+    const { conversation_id } = req.params;
+    const result = await db.execute(sql`
+      SELECT * FROM swell_conversation_messages
+      WHERE conversation_id = ${conversation_id}
+      ORDER BY created_at ASC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET messages error:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── Customers (backed by swell_customers) ────────────────────────────────────
+
+// GET /api/customers/search?tenant_id=&phone=&address=
 router.get("/customers/search", async (req: Request, res: Response) => {
   try {
-    const { phone, address, brand_id } = req.query;
-
-    if (!brand_id || (!phone && !address)) {
-      return res
-        .status(400)
-        .json({ error: "brand_id and (phone or address) required" });
+    const { tenant_id, phone, address } = req.query as Record<string, string>;
+    if (!tenant_id || (!phone && !address)) {
+      res.status(400).json({ error: "tenant_id + (phone or address) required" });
+      return;
     }
-
-    let customer = null;
-
+    let rows;
     if (phone) {
-      customer = await db.query.customersTable.findFirst({
-        where: and(
-          eq(customersTable.phone, phone as string),
-          eq(customersTable.brand_id, brand_id as string)
-        ),
-      });
+      rows = await db.execute(sql`
+        SELECT * FROM swell_customers WHERE tenant_id = ${tenant_id} AND phone = ${phone} LIMIT 5
+      `);
     }
-
-    if (!customer && address) {
-      const [street, city] = (address as string).split(",").map((s: string) => s.trim());
-      customer = await db.query.customersTable.findFirst({
-        where: and(
-          eq(customersTable.city, city),
-          eq(customersTable.street_name, street),
-          eq(customersTable.brand_id, brand_id as string)
-        ),
-      });
+    if ((!rows || !rows.rows.length) && address) {
+      rows = await db.execute(sql`
+        SELECT * FROM swell_customers
+        WHERE tenant_id = ${tenant_id} AND address ILIKE ${"%" + address + "%"}
+        LIMIT 5
+      `);
     }
-
-    if (!customer) {
-      return res.status(404).json({ error: "Customer not found" });
-    }
-
-    res.json(customer);
-  } catch (error) {
-    console.error("Error searching customer:", error);
-    res.status(500).json({ error: "Internal server error" });
+    if (!rows || !rows.rows.length) { res.status(404).json({ error: "Customer not found" }); return; }
+    res.json(rows.rows);
+  } catch (err) {
+    console.error("GET customers/search error:", err);
+    res.status(500).json({ error: String(err) });
   }
 });
 
-// POST /api/customers
+// POST /api/customers — create or update (dedup by phone OR address)
 router.post("/customers", async (req: Request, res: Response) => {
   try {
-    const {
-      brand_id,
-      phone,
-      email,
-      name,
-      street_number,
-      street_name,
-      city,
-      state,
-      zip_code,
-      latitude,
-      longitude,
-    } = req.body;
+    const { tenant_id, phone, full_name, email, address, city, state, zip, source } = req.body;
+    if (!tenant_id) { res.status(400).json({ error: "tenant_id required" }); return; }
 
-    if (!brand_id) {
-      return res.status(400).json({ error: "brand_id required" });
-    }
-
-    // Check if customer exists by phone or address
-    let existingCustomer = null;
-
+    let existing: any = null;
     if (phone) {
-      existingCustomer = await db.query.customersTable.findFirst({
-        where: and(
-          eq(customersTable.phone, phone),
-          eq(customersTable.brand_id, brand_id)
-        ),
-      });
+      const r = await db.execute(sql`SELECT * FROM swell_customers WHERE tenant_id=${tenant_id} AND phone=${phone} LIMIT 1`);
+      existing = r.rows[0];
+    }
+    if (!existing && address && city) {
+      const r = await db.execute(sql`SELECT * FROM swell_customers WHERE tenant_id=${tenant_id} AND address ILIKE ${"%" + address + "%"} AND city ILIKE ${city} LIMIT 1`);
+      existing = r.rows[0];
     }
 
-    if (!existingCustomer && street_name && city) {
-      existingCustomer = await db.query.customersTable.findFirst({
-        where: and(
-          eq(customersTable.street_name, street_name),
-          eq(customersTable.city, city),
-          eq(customersTable.brand_id, brand_id)
-        ),
-      });
+    if (existing) {
+      const updated = await db.execute(sql`
+        UPDATE swell_customers SET
+          full_name  = COALESCE(${full_name ?? null}, full_name),
+          email      = COALESCE(${email ?? null}, email),
+          phone      = COALESCE(${phone ?? null}, phone),
+          address    = COALESCE(${address ?? null}, address),
+          city       = COALESCE(${city ?? null}, city),
+          state      = COALESCE(${state ?? null}, state),
+          zip        = COALESCE(${zip ?? null}, zip),
+          updated_at = NOW()
+        WHERE id = ${existing.id} RETURNING *
+      `);
+      res.json({ customer: updated.rows[0], created: false });
+      return;
     }
 
-    if (existingCustomer) {
-      // Update existing customer
-      const [updated] = await db
-        .update(customersTable)
-        .set({
-          name: name || existingCustomer.name,
-          email: email || existingCustomer.email,
-          latitude: latitude || existingCustomer.latitude,
-          longitude: longitude || existingCustomer.longitude,
-          updated_at: new Date(),
-        })
-        .where(eq(customersTable.id, existingCustomer.id))
-        .returning();
-
-      return res.json(updated);
-    }
-
-    // Create new customer
-    const [created] = await db
-      .insert(customersTable)
-      .values({
-        brand_id,
-        phone,
-        email,
-        name,
-        street_number,
-        street_name,
-        city,
-        state,
-        zip_code,
-        latitude,
-        longitude,
-      } as InsertCustomer)
-      .returning();
-
-    res.status(201).json(created);
-  } catch (error) {
-    console.error("Error creating customer:", error);
-    res.status(500).json({ error: "Internal server error" });
+    const created = await db.execute(sql`
+      INSERT INTO swell_customers (tenant_id, phone, full_name, email, address, city, state, zip, source)
+      VALUES (${tenant_id}, ${phone ?? null}, ${full_name ?? null}, ${email ?? null},
+              ${address ?? null}, ${city ?? null}, ${state ?? null}, ${zip ?? null},
+              ${source ?? "web_chat"})
+      RETURNING *
+    `);
+    res.status(201).json({ customer: created.rows[0], created: true });
+  } catch (err) {
+    console.error("POST /customers error:", err);
+    res.status(500).json({ error: String(err) });
   }
 });
 
-// GET /api/agents/:agent_id/ab-tests
-router.get("/agents/:agent_id/ab-tests", async (req: Request, res: Response) => {
+// ─── A/B Tests ────────────────────────────────────────────────────────────────
+
+// GET /api/agents/:tenant_id/ab-tests — message-level A/B history (swell_ab_test_history)
+router.get("/agents/:tenant_id/ab-tests", async (req: Request, res: Response) => {
   try {
-    const { agent_id } = req.params;
-
-    const latestTest = await db.query.abTestResultsTable.findFirst({
-      where: eq(abTestResultsTable.agent_id, agent_id),
-      orderBy: (abTests, { desc }) => [desc(abTests.created_at)],
-    });
-
-    res.json(latestTest || {});
-  } catch (error) {
-    console.error("Error fetching A/B test:", error);
-    res.status(500).json({ error: "Internal server error" });
+    const { tenant_id } = req.params;
+    const result = await db.execute(sql`
+      SELECT * FROM swell_ab_test_history
+      WHERE tenant_id = ${tenant_id}
+      ORDER BY created_at DESC LIMIT 20
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET ab-tests error:", err);
+    res.status(500).json({ error: String(err) });
   }
 });
 
